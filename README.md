@@ -21,19 +21,25 @@ auto_download/
 
 ## 首次部署
 
+项目使用 **Python 3.11**。若 `venv` 里解释器版本不对或符号链接已断（例如曾用 3.14 创建后又卸载），删掉重建即可：
+
 ```bash
-pip install -r requirements.txt
-python3.11 -m playwright install chromium
+rm -rf venv
+python3.11 -m venv venv
+./venv/bin/pip install -r requirements.txt
+./venv/bin/python -m playwright install chromium
 
 cp .env.example .env
 # 编辑 .env 填写 MYSQL_PASSWORD 等
 
 mysql -u root -p auto_download < app/schema.mysql.sql
 
-chmod +x cron_download.sh
+chmod +x cron_download.sh manage.sh
 ```
 
 ## 运行
+
+### 定时抓取
 
 ```bash
 ./cron_download.sh
@@ -41,10 +47,27 @@ chmod +x cron_download.sh
 # 指定日期
 START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
 
-python3.11 cron/download_links.py --start-date 2026-04-20 --end-date 2026-04-30
+./venv/bin/python cron/download_links.py --start-date 2026-04-20 --end-date 2026-04-30
 ```
 
 日志：`tail -f log/cron_download.log`
+
+### 查询 API（FastAPI）
+
+```bash
+./manage.sh start      # 后台启动，PID 写入 download.pid
+./manage.sh stop
+./manage.sh restart
+
+tail -f log/download.log
+```
+
+默认端口 `8083`，可在 `.env` 设置 `DOWNLOAD_API_PORT`。
+
+```bash
+curl "http://127.0.0.1:8083/links?code=SONE-123"
+curl "http://127.0.0.1:8083/links?code=SONE-123&min_size_gb=1.5&max_size_gb=3"
+```
 
 ## MySQL 表 `magnet_link`
 

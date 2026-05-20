@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Environment & secrets
+.env
+
+# Runtime
+log/
+*.log
+*.pid
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Playwright
+.playwright/

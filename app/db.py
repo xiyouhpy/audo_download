@@ -4,6 +4,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 from pymysql.err import OperationalError
 
+from app.parsers import normalize_code
 from app.settings import PROJECT_ROOT, MySQLConfig
 
 _SCHEMA = (PROJECT_ROOT / "app" / "schema.mysql.sql").read_text(encoding="utf-8")
@@ -92,3 +93,16 @@ class MagnetDB:
                 VALUES (%s, NULL, %s, %s, %s)""",
                 (code, reason, start, end),
             )
+
+    def fetch_links_by_code(self, code: str) -> list[dict]:
+        norm = normalize_code(code)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """SELECT code, thunder_url, total_size_text, group_name, title, created_at
+                FROM magnet_link
+                WHERE thunder_url IS NOT NULL
+                  AND (code = %s OR LOWER(REPLACE(code, '-', '')) = %s)
+                ORDER BY id DESC""",
+                (code.strip(), norm),
+            )
+            return list(cur.fetchall())
