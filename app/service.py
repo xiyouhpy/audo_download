@@ -39,6 +39,15 @@ def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
     if not codes:
         logger.info("从 API 获取 %s 个番号", len(work_codes))
 
+    m = cfg.mysql
+    logger.info(
+        "MySQL 目标: %s@%s:%s/%s（每条写入后立即提交）",
+        m.user,
+        m.host,
+        m.port,
+        m.database,
+    )
+
     link_count = miss_count = 0
     with MagnetDB(cfg.mysql) as db, LaowangBrowser(
         cfg.laowang_base_url, cfg.headless
@@ -46,6 +55,8 @@ def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
         for i, code in enumerate(work_codes, 1):
             logger.info("[%s/%s] %s", i, len(work_codes), code)
             n, miss = _process_code(db, browser, cfg, code)
+            db.commit()
+            logger.info("%s 已提交 MySQL", code)
             link_count += n
             miss_count += miss
             time.sleep(cfg.request_delay_sec)

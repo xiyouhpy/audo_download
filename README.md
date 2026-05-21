@@ -52,6 +52,8 @@ START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
 
 日志：`log/download.log`、`log/cron_download.log`
 
+抓取任务**每处理完一个番号立即提交 MySQL**（无需等 2354 个全部跑完），日志可见 `已提交 MySQL`。
+
 ### 查询 API
 
 ```bash

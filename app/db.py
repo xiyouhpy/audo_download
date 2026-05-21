@@ -19,6 +19,7 @@ class MagnetDB:
         self._open()
         with self._conn.cursor() as cur:
             cur.execute(_SCHEMA)
+        self.commit()
         return self
 
     def __exit__(self, *args):
@@ -62,6 +63,11 @@ class MagnetDB:
                 ) from e
             raise
 
+    def commit(self) -> None:
+        """提交当前事务（每个番号处理完应调用一次）。"""
+        if self._conn:
+            self._conn.commit()
+
     def save_links(self, start: str, end: str, records: list[dict]) -> int:
         rows = [
             (
@@ -87,7 +93,8 @@ class MagnetDB:
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
                 rows,
             )
-            return cur.rowcount
+            n = cur.rowcount
+        return n
 
     def save_miss(self, start: str, end: str, code: str, reason: str) -> None:
         with self._conn.cursor() as cur:
