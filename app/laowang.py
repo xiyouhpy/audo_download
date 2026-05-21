@@ -3,10 +3,9 @@ import re
 import time
 from urllib.parse import urljoin
 
-from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-from app.parsers import SearchItem, magnet_to_thunder, parse_search_results
+from app.parsers import SearchItem, magnet_to_thunder, make_soup, parse_search_results
 from app.settings import LAOWANG_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,7 @@ class LaowangBrowser:
         self, code: str, min_bytes: int, max_links: int = 20
     ) -> list[dict]:
         html = self.search(code)
-        soup = BeautifulSoup(html, "lxml")
+        soup = make_soup(html)
         extra_pages = set()
         for a in soup.select("nav.pagination a.spbtn, nav.pagination a.spbtna"):
             m = re.search(r"searchWithPath\((\d+)\)", a.get("onclick", ""))

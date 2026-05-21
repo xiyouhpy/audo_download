@@ -1,9 +1,16 @@
 import base64
 import hashlib
+import importlib.util
 import re
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
+
+_HTML_PARSER = "lxml" if importlib.util.find_spec("lxml") else "html.parser"
+
+
+def make_soup(html: str) -> BeautifulSoup:
+    return BeautifulSoup(html, _HTML_PARSER)
 
 _SIZE_RE = re.compile(
     r"([\d.]+)\s*(B|KB|MB|GB|TB|Byte|Bytes)", re.IGNORECASE
@@ -46,7 +53,7 @@ class SearchItem:
 
 def parse_search_results(html: str, code: str) -> list[SearchItem]:
     items = []
-    for panel in BeautifulSoup(html, "lxml").select("div.panel.search-panel"):
+    for panel in make_soup(html).select("div.panel.search-panel"):
         heading = panel.select_one(".panel-heading h3.panel-title a")
         if not heading or not heading.get("href", "").startswith("/detail/"):
             continue
