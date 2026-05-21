@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pymysql
@@ -8,6 +9,10 @@ from app.parsers import normalize_code
 from app.settings import PROJECT_ROOT, MySQLConfig
 
 _SCHEMA = (PROJECT_ROOT / "app" / "schema.mysql.sql").read_text(encoding="utf-8")
+
+
+def thunder_url_md5(url: str) -> str:
+    return hashlib.md5(url.encode("utf-8")).hexdigest()
 
 
 class MagnetDB:
@@ -69,6 +74,7 @@ class MagnetDB:
             (
                 r["code"],
                 r["thunder"],
+                thunder_url_md5(r["thunder"]),
                 r.get("total_size_text"),
                 r.get("group_name"),
                 r.get("title"),
@@ -76,12 +82,16 @@ class MagnetDB:
                 end,
             )
             for r in records
+            if r.get("thunder")
         ]
+        if not rows:
+            return
         with self._conn.cursor() as cur:
             cur.executemany(
-                """INSERT INTO magnet_link
-                (code, thunder_url, total_size_text, group_name, title, start_date, end_date)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                """INSERT IGNORE INTO magnet_link
+                (code, thunder_url, thunder_url_md5, total_size_text,
+                 group_name, title, start_date, end_date)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
                 rows,
             )
 

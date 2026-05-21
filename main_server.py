@@ -131,7 +131,7 @@ if __name__ == "__main__":
     import uvicorn
 
     load_dotenv()
-    port = int(os.getenv("DOWNLOAD_API_PORT", "8083"))
+    port = int(os.getenv("DOWNLOAD_API_PORT", "8084"))
     uvicorn.run(
         "main_server:app",
         host="0.0.0.0",

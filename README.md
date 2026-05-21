@@ -71,7 +71,7 @@ curl "http://127.0.0.1:8083/links?code=SONE-123&min_size_gb=1.5&max_size_gb=3"
 
 ## MySQL 表 `magnet_link`
 
-- 有链接：`thunder_url` 有值
+- 有链接：`thunder_url` 有值，`thunder_url_md5` 为其 MD5；表上 `uk_thunder_url_md5` 唯一索引去重，写入用 `INSERT IGNORE`
 - 未命中：`thunder_url` 为 NULL，`miss_reason` 有说明
 
 ```sql
