@@ -1,18 +1,13 @@
-import hashlib
 from pathlib import Path
 
 import pymysql
 from pymysql.cursors import DictCursor
 from pymysql.err import OperationalError
 
-from app.parsers import normalize_code
+from app.parsers import normalize_code, thunder_url_md5
 from app.settings import PROJECT_ROOT, MySQLConfig
 
 _SCHEMA = (PROJECT_ROOT / "app" / "schema.mysql.sql").read_text(encoding="utf-8")
-
-
-def thunder_url_md5(url: str) -> str:
-    return hashlib.md5(url.encode("utf-8")).hexdigest()
 
 
 class MagnetDB:
@@ -67,14 +62,12 @@ class MagnetDB:
                 ) from e
             raise
 
-    def save_links(self, start: str, end: str, records: list[dict]) -> None:
-        if not records:
-            return
+    def save_links(self, start: str, end: str, records: list[dict]) -> int:
         rows = [
             (
                 r["code"],
-                r["thunder"],
-                thunder_url_md5(r["thunder"]),
+                r["thunder_url"],
+                thunder_url_md5(r["thunder_url"]),
                 r.get("total_size_text"),
                 r.get("group_name"),
                 r.get("title"),
@@ -82,10 +75,10 @@ class MagnetDB:
                 end,
             )
             for r in records
-            if r.get("thunder")
+            if r.get("thunder_url")
         ]
         if not rows:
-            return
+            return 0
         with self._conn.cursor() as cur:
             cur.executemany(
                 """INSERT IGNORE INTO magnet_link
@@ -94,6 +87,7 @@ class MagnetDB:
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
                 rows,
             )
+            return cur.rowcount
 
     def save_miss(self, start: str, end: str, code: str, reason: str) -> None:
         with self._conn.cursor() as cur:
@@ -108,11 +102,11 @@ class MagnetDB:
         norm = normalize_code(code)
         with self._conn.cursor() as cur:
             cur.execute(
-                """SELECT code, thunder_url, total_size_text, group_name, title, created_at
+                """SELECT code, thunder_url, total_size_text, group_name, title
                 FROM magnet_link
                 WHERE thunder_url IS NOT NULL
                   AND (code = %s OR LOWER(REPLACE(code, '-', '')) = %s)
-                ORDER BY id DESC""",
+                ORDER BY id""",
                 (code.strip(), norm),
             )
             return list(cur.fetchall())

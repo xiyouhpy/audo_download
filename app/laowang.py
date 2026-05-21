@@ -93,11 +93,10 @@ class LaowangBrowser:
             out.append(
                 {
                     "code": code,
+                    "thunder_url": magnet_to_thunder(magnet),
                     "group_name": item.group_name,
                     "title": item.title,
                     "total_size_text": item.total_size_text,
-                    "magnet": magnet,
-                    "thunder": magnet_to_thunder(magnet),
                 }
             )
             time.sleep(0.5)

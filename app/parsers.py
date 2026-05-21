@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -28,6 +29,10 @@ def parse_size(text: str) -> int:
 
 def magnet_to_thunder(magnet: str) -> str:
     return "thunder://" + base64.b64encode(f"AA{magnet}ZZ".encode()).decode()
+
+
+def thunder_url_md5(url: str) -> str:
+    return hashlib.md5(url.encode("utf-8")).hexdigest()
 
 
 @dataclass

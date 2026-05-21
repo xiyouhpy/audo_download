@@ -1,22 +1,36 @@
 #!/bin/bash
+# 用法: ./manage.sh {start|stop|restart|status}
 
-# 服务管理脚本
-# 使用方法：./manage.sh {start|stop|restart}
+cd "$(dirname "$0")" || exit 1
 
-# 配置变量
 SERVICE_NAME="download"
-# shellcheck disable=SC2034
-PYTHON_APP="main_server.py"   # FastAPI 入口
-LOG_DIR="./log"               # 日志目录
-PID_FILE="./$SERVICE_NAME.pid" # PID 文件路径
+LOG_DIR="./log"
+PID_FILE="./${SERVICE_NAME}.pid"
 
-# 创建日志目录
 mkdir -p "$LOG_DIR"
 
-# 生成带时间戳的日志文件名
 get_log_file() {
-    # echo "$LOG_DIR/${SERVICE_NAME}_$(date +%Y%m%d%H%M%S).log"
     echo "$LOG_DIR/${SERVICE_NAME}.log"
+}
+
+get_api_port() {
+    local port="8084"
+    if [ -f ".env" ]; then
+        local val
+        val=$(grep -E '^DOWNLOAD_API_PORT=' .env | tail -1 | cut -d= -f2 | tr -d ' "'\''')
+        [ -n "$val" ] && port="$val"
+    fi
+    echo "$port"
+}
+
+resolve_python() {
+    if [ -x "./venv/bin/python" ]; then
+        echo "./venv/bin/python"
+    elif command -v python3.11 >/dev/null 2>&1; then
+        echo "python3.11"
+    else
+        echo "python3"
+    fi
 }
 
 start() {
@@ -25,65 +39,59 @@ start() {
         if ps -p "$PID" > /dev/null 2>&1; then
             echo "Service is already running (PID: $PID)"
             return 1
-        else
-            echo "Removing stale PID file..."
-            rm -f "$PID_FILE"
         fi
+        rm -f "$PID_FILE"
     fi
 
-    # 启动服务并重定向日志
-    LOG_FILE=$(get_log_file)
-    if [ -d "venv" ]; then
+    PY=$(resolve_python)
+    if [ "$PY" = "./venv/bin/python" ] || [ -d "venv" ]; then
         if [ ! -x "./venv/bin/python" ]; then
-            echo "venv 已失效或 Python 版本不对，请重建：" >&2
-            echo "  rm -rf venv && python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt" >&2
+            echo "venv 无效，请重建: rm -rf venv && python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt" >&2
             return 1
         fi
-        PY="./venv/bin/python"
-    else
-        PY="python3.11"
     fi
-    nohup "$PY" "$PYTHON_APP" >> "$LOG_FILE" 2>&1 &
-    PID=$!
 
-    # 写入 PID 文件
-    echo $PID > "$PID_FILE"
-    echo "Service started (PID: $PID)"
-    echo "Log output: $LOG_FILE"
+    PORT=$(get_api_port)
+    LOG_FILE=$(get_log_file)
+    nohup "$PY" -m uvicorn main_server:app --host 0.0.0.0 --port "$PORT" >> "$LOG_FILE" 2>&1 &
+    PID=$!
+    echo "$PID" > "$PID_FILE"
+    sleep 1
+    if ! ps -p "$PID" > /dev/null 2>&1; then
+        echo "启动失败，日志:" >&2
+        tail -20 "$LOG_FILE" >&2
+        rm -f "$PID_FILE"
+        return 1
+    fi
+    echo "Started PID=$PID port=$PORT log=$LOG_FILE"
 }
 
 stop() {
-    if [ ! -f "$PID_FILE" ]; then
-        echo "PID file not found. Service may not be running."
-        return 1
-    fi
-
+    [ -f "$PID_FILE" ] || { echo "Not running"; return 1; }
     PID=$(cat "$PID_FILE")
-    if ps -p $PID > /dev/null 2>&1; then
+    if ps -p "$PID" > /dev/null 2>&1; then
         kill -9 "$PID"
-        echo "Service stopped (PID: $PID)"
-        rm -f "$PID_FILE"
+        echo "Stopped PID=$PID"
     else
-        echo "Service not running (PID: $PID)"
-        rm -f "$PID_FILE"
+        echo "Stale PID=$PID"
     fi
+    rm -f "$PID_FILE"
+}
+
+status() {
+    PORT=$(get_api_port)
+    if [ -f "$PID_FILE" ] && ps -p "$(cat "$PID_FILE")" > /dev/null 2>&1; then
+        echo "Running PID=$(cat "$PID_FILE") port=$PORT"
+        return 0
+    fi
+    echo "Not running (port $PORT)"
+    return 1
 }
 
 case "$1" in
-    start)
-        start
-        ;;
-    stop)
-        stop
-        ;;
-    restart)
-        stop
-        sleep 2
-        start
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart}"
-        exit 1
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 2; start ;;
+    status) status ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac
-
-exit 0
