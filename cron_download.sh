@@ -18,8 +18,9 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-START_DATE="${START_DATE:-$(date -d '7 days ago' +%Y-%m-%d 2>/dev/null || date -v-7d +%Y-%m-%d)}"
-END_DATE="${END_DATE:-$(date +%Y-%m-%d)}"
+# 默认：发行日期为今天起连续 7 天（含今天，至今天+6）
+START_DATE="${START_DATE:-$(date +%Y-%m-%d)}"
+END_DATE="${END_DATE:-$(date -d '+6 days' +%Y-%m-%d 2>/dev/null || date -v+6d +%Y-%m-%d)}"
 
 echo "=========================================" >> "$LOG_FILE"
 echo "下载任务开始 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"

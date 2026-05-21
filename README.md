@@ -42,6 +42,8 @@ chmod +x cron_download.sh manage.sh
 
 ### 抓取
 
+默认按作品 **发行日期 `release_date`** 筛选：**今天起连续 7 天**（含今天，至今天+6 天）。
+
 ```bash
 ./cron_download.sh
 START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
