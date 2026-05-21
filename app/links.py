@@ -5,11 +5,11 @@ from app.settings import GB, gb_to_bytes
 
 def build_link_list(
     rows: list[dict],
-    min_size_gb: float | None = None,
-    max_size_gb: float | None = None,
+    min_size: float | None = None,
+    max_size: float | None = None,
 ) -> list[LinkItem]:
-    min_bytes = gb_to_bytes(min_size_gb) if min_size_gb is not None else None
-    max_bytes = gb_to_bytes(max_size_gb) if max_size_gb is not None else None
+    min_bytes = gb_to_bytes(min_size) if min_size is not None else None
+    max_bytes = gb_to_bytes(max_size) if max_size is not None else None
 
     items: list[LinkItem] = []
     for row in rows:
@@ -30,6 +30,7 @@ def build_link_list(
                 size_gb=round(size_bytes / GB, 3) if size_bytes else 0.0,
                 group_name=row.get("group_name"),
                 title=row.get("title"),
+                created_at=row.get("created_at"),
             )
         )
 

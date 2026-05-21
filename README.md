@@ -57,7 +57,14 @@ START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
 ```bash
 ./manage.sh start
 curl "http://127.0.0.1:8084/health"
-curl "http://127.0.0.1:8084/links?code=JUFE-621&min_size_gb=1.5&max_size_gb=3"
+
+# 按番号查（体积可选）
+curl "http://127.0.0.1:8084/links?code=JUFE-621&min_size=1.5&max_size=3"
+
+# 抓取列表：按入库时间、体积、番号筛选（分页）
+curl "http://127.0.0.1:8084/links/list?create_start=2026-05-01&create_end=2026-05-21"
+curl "http://127.0.0.1:8084/links/list?min_size=1.5&max_size=3&page=1&page_size=50"
+curl "http://127.0.0.1:8084/links/list?create_start=2026-05-20&code=JUFE-621"
 ```
 
 端口：`.env` 中 `DOWNLOAD_API_PORT`（默认 8084）。

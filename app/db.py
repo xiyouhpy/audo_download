@@ -98,15 +98,37 @@ class MagnetDB:
                 (code, reason, start, end),
             )
 
+    _LINK_COLS = (
+        "code, thunder_url, total_size_text, group_name, title, created_at"
+    )
+
     def fetch_links_by_code(self, code: str) -> list[dict]:
-        norm = normalize_code(code)
-        with self._conn.cursor() as cur:
-            cur.execute(
-                """SELECT code, thunder_url, total_size_text, group_name, title
-                FROM magnet_link
-                WHERE thunder_url IS NOT NULL
-                  AND (code = %s OR LOWER(REPLACE(code, '-', '')) = %s)
-                ORDER BY id""",
-                (code.strip(), norm),
+        return self.fetch_links(code=code)
+
+    def fetch_links(
+        self,
+        *,
+        code: str | None = None,
+        create_start: str | None = None,
+        create_end: str | None = None,
+    ) -> list[dict]:
+        sql = [
+            f"SELECT {self._LINK_COLS} FROM magnet_link WHERE thunder_url IS NOT NULL"
+        ]
+        params: list = []
+        if code:
+            norm = normalize_code(code)
+            sql.append(
+                "AND (code = %s OR LOWER(REPLACE(code, '-', '')) = %s)"
             )
+            params.extend([code.strip(), norm])
+        if create_start:
+            sql.append("AND created_at >= %s")
+            params.append(create_start)
+        if create_end:
+            sql.append("AND created_at <= %s")
+            params.append(create_end)
+        sql.append("ORDER BY created_at DESC, id DESC")
+        with self._conn.cursor() as cur:
+            cur.execute(" ".join(sql), params)
             return list(cur.fetchall())

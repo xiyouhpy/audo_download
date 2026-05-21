@@ -12,5 +12,6 @@ CREATE TABLE IF NOT EXISTS magnet_link (
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_code (code),
     KEY idx_dates (start_date, end_date),
+    KEY idx_created_at (created_at),
     UNIQUE KEY uk_thunder_url_md5 (thunder_url_md5)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
