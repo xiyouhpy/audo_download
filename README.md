@@ -69,6 +69,35 @@ curl "http://127.0.0.1:8084/links/list?create_start=2026-05-20&code=JUFE-621"
 
 端口：`.env` 中 `DOWNLOAD_API_PORT`（默认 8084）。
 
+### 吊起迅雷下载
+
+从 `links/list` 拉取链接，**默认自动确认并立即开始下载**（`--method auto`）：
+
+| 平台 | 行为 |
+|------|------|
+| Windows | COM：`AddTask` 立即开始 + `CommitTasks2(1)` 静默提交（需 `pip install pywin32`） |
+| macOS | 写入迅雷静默偏好 + 打开 `magnet://`（无需辅助功能）；可选 `--mac-ui-confirm` 自动点确认 |
+
+```bash
+chmod +x xunlei_download.sh
+
+# 默认 http://101.42.12.171:8084，1.5~6 GB，自动确认
+./xunlei_download.sh
+
+# 只预览
+./xunlei_download.sh --dry-run
+
+# 改用其它 API 地址时
+DOWNLOAD_API_BASE=http://127.0.0.1:8084 ./xunlei_download.sh
+
+# 恢复旧行为（会弹出迅雷确认框）
+./xunlei_download.sh --no-auto --method open
+```
+
+**Windows 额外建议**：迅雷 → 工具 → 配置 → 高级，取消「通过 IE 右键…添加任务」勾选，可减少确认弹窗。
+
+**macOS**：脚本会写入 `showNewTaskPanel=false` 等偏好；若仍弹确认窗请**重启迅雷**一次。只有使用 `--mac-ui-confirm` 时才需在「辅助功能」里勾选终端。
+
 ## 表 `magnet_link`
 
 | 场景 | 说明 |

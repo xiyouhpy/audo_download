@@ -38,6 +38,24 @@ def magnet_to_thunder(magnet: str) -> str:
     return "thunder://" + base64.b64encode(f"AA{magnet}ZZ".encode()).decode()
 
 
+def thunder_to_magnet(url: str) -> str | None:
+    """将 thunder:// 链接还原为 magnet:?xt=urn:btih:..."""
+    raw = (url or "").strip()
+    prefix = "thunder://"
+    if not raw.lower().startswith(prefix):
+        return None
+    try:
+        decoded = base64.b64decode(raw[len(prefix) :], validate=False).decode(
+            "utf-8", errors="ignore"
+        )
+    except Exception:
+        return None
+    if decoded.startswith("AA") and decoded.endswith("ZZ"):
+        magnet = decoded[2:-2]
+        return magnet if magnet.lower().startswith("magnet:") else None
+    return None
+
+
 def thunder_url_md5(url: str) -> str:
     return hashlib.md5(url.encode("utf-8")).hexdigest()
 

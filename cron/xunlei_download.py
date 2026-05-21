@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+"""从 links/list API 拉取 thunder 链接，并吊起本机迅雷下载。"""
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin
+
+import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.parsers import thunder_to_magnet  # noqa: E402
+from app.settings import load_dotenv  # noqa: E402
+
+DEFAULT_API_BASE = "http://101.42.12.171:8084"
+THUNDER_AGENT_IDS = (
+    "ThunderAgent.Agent.1",
+    "ThunderAgent.ThunderAgent.1",
+    "ThunderAgent.Agent",
+)
+
+# Mac 静默偏好（写入 com.xunlei.Thunder，需重启迅雷后完全生效）
+_MAC_SILENT_PREFS: tuple[tuple[str, str], ...] = (
+    ("automaticStartTask", "true"),
+    ("showNewTaskPanel", "false"),
+    ("silentCreatingBTTask", "true"),
+    ("enableMagnetsAtuoCompletion", "true"),
+)
+
+# 可选：UI 自动点确认（需终端「辅助功能」权限，默认不用）
+_MAC_UI_CONFIRM_SCRIPT = """
+on run argv
+    set waitSec to (item 1 of argv) as number
+    delay waitSec
+    tell application "System Events"
+        if not (exists process "Thunder") then return
+        tell process "Thunder"
+            set frontmost to true
+            repeat with btnName in {"立即下载", "下载", "确定", "开始下载"}
+                repeat with w in windows
+                    try
+                        if exists (button btnName of w) then
+                            click button btnName of w
+                            return
+                        end if
+                    end try
+                end repeat
+            end repeat
+            try
+                key code 36
+            end try
+        end tell
+    end tell
+end run
+"""
+
+
+def api_base_from_env() -> str:
+    base = os.getenv("DOWNLOAD_API_BASE", "").strip().rstrip("/")
+    return base or DEFAULT_API_BASE
+
+
+def fetch_link_page(
+    client: httpx.Client,
+    base: str,
+    params: dict[str, Any],
+    page: int,
+) -> dict[str, Any]:
+    url = urljoin(base + "/", "links/list")
+    resp = client.get(url, params={**params, "page": page})
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_all_links(
+    client: httpx.Client,
+    base: str,
+    params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    data = fetch_link_page(client, base, params, page=1)
+    links = list(data.get("links") or [])
+    total_pages = int(data.get("total_pages") or 1)
+    for page in range(2, total_pages + 1):
+        data = fetch_link_page(client, base, params, page=page)
+        links.extend(data.get("links") or [])
+    return links
+
+
+def task_url(thunder_url: str, prefer_magnet: bool) -> str:
+    if prefer_magnet:
+        magnet = thunder_to_magnet(thunder_url)
+        if magnet:
+            return magnet
+    return thunder_url
+
+
+def resolve_method(method: str, auto: bool) -> str:
+    if method != "auto":
+        return method
+    if platform.system() == "Windows" and auto:
+        return "com"
+    if platform.system() == "Darwin" and auto:
+        return "mac"
+    return "open"
+
+
+_mac_prefs_applied = False
+
+
+def ensure_mac_auto_prefs() -> None:
+    """写入迅雷静默/自动开始相关偏好（无需辅助功能权限）。"""
+    global _mac_prefs_applied
+    if _mac_prefs_applied:
+        return
+    for key, value in _MAC_SILENT_PREFS:
+        subprocess.run(
+            ["defaults", "write", "com.xunlei.Thunder", key, "-bool", value],
+            check=False,
+        )
+    _mac_prefs_applied = True
+
+
+def _mac_accessibility_ok() -> bool:
+    probe = subprocess.run(
+        [
+            "osascript",
+            "-e",
+            'tell application "System Events" to return name of first application process',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    return probe.returncode == 0
+
+
+def _mac_ui_confirm(confirm_delay: float) -> bool:
+    if confirm_delay <= 0:
+        return True
+    result = subprocess.run(
+        ["osascript", "-e", _MAC_UI_CONFIRM_SCRIPT, str(confirm_delay)],
+        capture_output=True,
+        text=True,
+        timeout=confirm_delay + 15,
+    )
+    if result.returncode == 0:
+        return True
+    err = (result.stderr or result.stdout or "").strip()
+    if "-25211" in err or "辅助访问" in err or "assistive access" in err.lower():
+        print(
+            "  辅助功能未授权，已跳过 UI 自动点击。"
+            "可在「系统设置→隐私与安全性→辅助功能」勾选终端，"
+            "或使用 --mac-ui-confirm 前先授权。",
+            file=sys.stderr,
+        )
+    elif err:
+        print(f"  UI 自动确认失败: {err}", file=sys.stderr)
+    return False
+
+
+def _print_mac_auto_hint(ui_confirm: bool) -> None:
+    print(
+        "Mac 静默：已写入迅雷偏好（自动开始、不弹主界面等）。"
+        "若仍出现确认窗，请重启迅雷后再试；"
+        "或在迅雷「偏好设置→应用→基本设置→任务管理」"
+        "取消「新建任务时显示主界面」。"
+    )
+    if ui_confirm:
+        if _mac_accessibility_ok():
+            print("Mac UI 确认：已启用（辅助功能已授权）。")
+        else:
+            print(
+                "Mac UI 确认：未获得辅助功能权限，将仅依赖迅雷偏好静默添加。",
+                file=sys.stderr,
+            )
+
+
+def _launch_mac_auto(
+    thunder_url: str,
+    *,
+    confirm_delay: float,
+    ui_confirm: bool,
+) -> None:
+    ensure_mac_auto_prefs()
+    url = task_url(thunder_url, prefer_magnet=True)
+    subprocess.run(["open", "-a", "Thunder", url], check=True)
+    if ui_confirm and _mac_accessibility_ok():
+        _mac_ui_confirm(confirm_delay)
+
+
+def _get_windows_agent():
+    try:
+        import win32com.client
+    except ImportError as exc:
+        raise SystemExit("Windows 自动下载需安装 pywin32：pip install pywin32") from exc
+
+    last_exc: Exception | None = None
+    for prog_id in THUNDER_AGENT_IDS:
+        try:
+            return win32com.client.Dispatch(prog_id)
+        except Exception as exc:
+            last_exc = exc
+    raise RuntimeError(f"无法连接迅雷 COM：{last_exc}") from last_exc
+
+
+def _launch_windows_com(
+    thunder_url: str,
+    *,
+    save_path: str,
+    auto: bool,
+) -> None:
+    agent = _get_windows_agent()
+    url = task_url(thunder_url, prefer_magnet=True)
+    start_mode = 1 if auto else 0
+    agent.AddTask(url, "", save_path, "", "", start_mode, 0, 5)
+    if auto and hasattr(agent, "CommitTasks2"):
+        agent.CommitTasks2(1)
+    else:
+        agent.CommitTasks(0)
+
+
+def _launch_windows_com_batch(
+    thunder_urls: list[str],
+    *,
+    save_path: str,
+    auto: bool,
+) -> None:
+    agent = _get_windows_agent()
+    start_mode = 1 if auto else 0
+    for thunder_url in thunder_urls:
+        url = task_url(thunder_url, prefer_magnet=True)
+        agent.AddTask(url, "", save_path, "", "", start_mode, 0, 5)
+    if auto and hasattr(agent, "CommitTasks2"):
+        agent.CommitTasks2(1)
+    else:
+        agent.CommitTasks(0)
+
+
+def launch_thunder_url(
+    thunder_url: str,
+    method: str,
+    *,
+    save_path: str = "",
+    auto: bool = True,
+    confirm_delay: float = 2.0,
+    mac_ui_confirm: bool = False,
+) -> None:
+    if method == "com":
+        _launch_windows_com(thunder_url, save_path=save_path, auto=auto)
+        return
+    if method == "mac":
+        _launch_mac_auto(
+            thunder_url,
+            confirm_delay=confirm_delay,
+            ui_confirm=mac_ui_confirm,
+        )
+        return
+
+    url = task_url(thunder_url, prefer_magnet=auto)
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.run(["open", "-a", "Thunder", url], check=True)
+    elif system == "Windows":
+        os.startfile(url)  # type: ignore[attr-defined]
+    else:
+        subprocess.run(["xdg-open", url], check=True)
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="从 API 拉取 thunder 链接并吊起迅雷下载")
+    p.add_argument(
+        "--api-base",
+        default=None,
+        help=f"API 根地址（默认 DOWNLOAD_API_BASE 或 {DEFAULT_API_BASE}）",
+    )
+    p.add_argument("--min-size", type=float, default=1.5, help="最小体积 GB（含）")
+    p.add_argument("--max-size", type=float, default=6.0, help="最大体积 GB（含）")
+    p.add_argument("--page-size", type=int, default=50, help="每页条数")
+    p.add_argument("--create-start", default=None, help="入库起始时间")
+    p.add_argument("--create-end", default=None, help="入库截止时间")
+    p.add_argument("--code", default=None, help="番号筛选")
+    p.add_argument("--delay", type=float, default=1.5, help="每条任务间隔秒数")
+    p.add_argument("--limit", type=int, default=0, help="最多添加条数，0 表示不限制")
+    p.add_argument("--save-path", default="", help="保存目录（Windows COM）")
+    p.add_argument(
+        "--confirm-delay",
+        type=float,
+        default=2.0,
+        help="配合 --mac-ui-confirm：等待新建任务窗出现后点「下载」的秒数",
+    )
+    p.add_argument(
+        "--mac-ui-confirm",
+        action="store_true",
+        help="Mac 用辅助功能自动点确认（需授权；默认靠迅雷偏好静默添加）",
+    )
+    p.add_argument(
+        "--method",
+        choices=("auto", "open", "com", "mac"),
+        default="auto",
+        help="吊起方式：auto=按平台自动静默（默认），open=仅打开链接，com/mac=指定方式",
+    )
+    p.add_argument(
+        "--no-auto",
+        action="store_true",
+        help="不自动确认/立即开始（等同手工确认）",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只打印链接，不实际吊起迅雷",
+    )
+    return p.parse_args()
+
+
+def main() -> int:
+    load_dotenv()
+    args = parse_args()
+    base = (args.api_base or api_base_from_env()).rstrip("/")
+    auto = not args.no_auto
+    method = resolve_method(args.method, auto)
+
+    if method == "com" and platform.system() != "Windows":
+        print("COM 仅 Windows，已改用 mac/open。", file=sys.stderr)
+        method = "mac" if platform.system() == "Darwin" and auto else "open"
+    if method == "mac" and platform.system() != "Darwin":
+        method = "com" if platform.system() == "Windows" and auto else "open"
+
+    params: dict[str, Any] = {
+        "min_size": args.min_size,
+        "max_size": args.max_size,
+        "page_size": args.page_size,
+    }
+    if args.create_start:
+        params["create_start"] = args.create_start
+    if args.create_end:
+        params["create_end"] = args.create_end
+    if args.code:
+        params["code"] = args.code
+
+    print(f"API: {base}/links/list")
+    print(
+        f"筛选: min_size={args.min_size} max_size={args.max_size} "
+        f"方式={method} 自动确认={'是' if auto else '否'}"
+    )
+    if args.code:
+        print(f"番号: {args.code}")
+
+    if method == "mac" and not args.dry_run:
+        ensure_mac_auto_prefs()
+        _print_mac_auto_hint(args.mac_ui_confirm)
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            links = fetch_all_links(client, base, params)
+    except httpx.HTTPError as exc:
+        print(f"请求失败: {exc}", file=sys.stderr)
+        return 1
+
+    if not links:
+        print("没有符合条件的链接。")
+        return 0
+
+    if args.limit > 0:
+        links = links[: args.limit]
+
+    print(f"共 {len(links)} 条，{'预览' if args.dry_run else '开始添加'}…")
+    if args.dry_run:
+        for i, item in enumerate(links, 1):
+            url = (item.get("thunder_url") or "").strip()
+            code = item.get("code") or ""
+            print(f"[{i}] {code}")
+            print(f"  {task_url(url, prefer_magnet=auto) if url else ''}")
+        print(f"完成：{len(links)} 条")
+        return 0
+
+    ok = 0
+    thunder_urls = [
+        (item.get("thunder_url") or "").strip()
+        for item in links
+        if (item.get("thunder_url") or "").strip()
+    ]
+
+    if method == "com" and len(thunder_urls) > 1:
+        codes = [item.get("code") or "" for item in links if item.get("thunder_url")]
+        print(f"批量添加 {len(thunder_urls)} 条（COM 一次提交）…")
+        for code in codes:
+            print(f"  - {code}")
+        try:
+            _launch_windows_com_batch(
+                thunder_urls, save_path=args.save_path, auto=auto
+            )
+            ok = len(thunder_urls)
+        except Exception as exc:
+            print(f"批量添加失败: {exc}", file=sys.stderr)
+            return 2
+        print(f"完成：成功 {ok}/{len(links)}")
+        return 0
+
+    for i, item in enumerate(links, 1):
+        url = (item.get("thunder_url") or "").strip()
+        code = item.get("code") or ""
+        size = item.get("total_size_text") or item.get("size_gb")
+        if not url:
+            print(f"[{i}] 跳过 {code}：无 thunder_url")
+            continue
+        print(f"[{i}/{len(links)}] {code} {size}")
+        try:
+            launch_thunder_url(
+                url,
+                method,
+                save_path=args.save_path,
+                auto=auto,
+                confirm_delay=args.confirm_delay,
+                mac_ui_confirm=args.mac_ui_confirm,
+            )
+            ok += 1
+        except Exception as exc:
+            print(f"  失败: {exc}", file=sys.stderr)
+        if i < len(links) and args.delay > 0:
+            time.sleep(args.delay)
+
+    print(f"完成：成功 {ok}/{len(links)}")
+    return 0 if ok == len(links) else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
