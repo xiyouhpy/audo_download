@@ -29,6 +29,7 @@ def update_magnet_links_by_code(
     *,
     start_date: str,
     end_date: str,
+    works_download_cnt: int | None = None,
 ) -> MagnetLinkUpdateResult:
     """按番号更新 ``magnet_link``：一次调用写入该 code 下全部数据（1 条或多条）。
 
@@ -45,6 +46,7 @@ def update_magnet_links_by_code(
         records: 本番号待写入的记录列表（可 1 条或多条）
         start_date: 抓取任务起始日期
         end_date: 抓取任务结束日期
+        works_download_cnt: 拉列表时 spider 返回的原 download_cnt，用于判断是否跳过 POST
 
     Returns:
         本番号本次新增的链接条数、未命中条数；并成功调用 spider 更新 download_cnt
@@ -100,11 +102,15 @@ def update_magnet_links_by_code(
             )
             miss_inserted += cur.rowcount
 
-    update_works_download_cnt(code, links_inserted)
+    works_api_ok = update_works_download_cnt(
+        code,
+        links_inserted,
+        current_download_cnt=works_download_cnt,
+    )
 
     return MagnetLinkUpdateResult(
         code=code,
         links_inserted=links_inserted,
         miss_inserted=miss_inserted,
-        works_api_ok=True,
+        works_api_ok=works_api_ok,
     )

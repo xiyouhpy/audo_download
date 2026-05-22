@@ -7,12 +7,19 @@ from app.laowang import LaowangBrowser
 from app.magnet_link import update_magnet_links_by_code
 from app.log_util import setup_logger
 from app.settings import SKIP_DOWNLOAD_IF_COUNT_OVER, RunConfig
-from app.works import fetch_codes
+from app.works import fetch_works
 
 logger = setup_logger("auto_download", "log/download.log")
 
 
-def _process_code(db: MagnetDB, browser: LaowangBrowser, cfg: RunConfig, code: str) -> tuple[int, int]:
+def _process_code(
+    db: MagnetDB,
+    browser: LaowangBrowser,
+    cfg: RunConfig,
+    code: str,
+    *,
+    works_download_cnt: int | None = None,
+) -> tuple[int, int]:
     """返回 (写入链接数, 未命中 0/1)。"""
     try:
         links = browser.collect_links(
@@ -26,6 +33,7 @@ def _process_code(db: MagnetDB, browser: LaowangBrowser, cfg: RunConfig, code: s
             [{"miss_reason": f"error: {exc}"}],
             start_date=cfg.start_date,
             end_date=cfg.end_date,
+            works_download_cnt=works_download_cnt,
         )
         return 0, 1
 
@@ -37,6 +45,7 @@ def _process_code(db: MagnetDB, browser: LaowangBrowser, cfg: RunConfig, code: s
             [{"miss_reason": "no_match"}],
             start_date=cfg.start_date,
             end_date=cfg.end_date,
+            works_download_cnt=works_download_cnt,
         )
         return 0, 1
 
@@ -46,22 +55,26 @@ def _process_code(db: MagnetDB, browser: LaowangBrowser, cfg: RunConfig, code: s
         links,
         start_date=cfg.start_date,
         end_date=cfg.end_date,
+        works_download_cnt=works_download_cnt,
     )
     n = result.links_inserted
     logger.info(
-        "%s 写入 %s 条（抓取 %s 条），已同步 spider download_cnt=%s",
+        "%s 写入 %s 条（抓取 %s 条），spider download_cnt 同步=%s",
         code,
         n,
         len(links),
-        n,
+        "成功" if result.works_api_ok else "失败",
     )
     return n, 0
 
 
 def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
-    work_codes = codes or fetch_codes(
-        cfg.start_date, cfg.end_date, cfg.works_page_size
+    works_by_code = (
+        fetch_works(cfg.start_date, cfg.end_date, cfg.works_page_size)
+        if not codes
+        else {}
     )
+    work_codes = codes or list(works_by_code.keys())
     if not codes:
         logger.info("从 API 获取 %s 个番号", len(work_codes))
 
@@ -90,7 +103,13 @@ def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
                 )
                 skip_count += 1
                 continue
-            n, miss = _process_code(db, browser, cfg, code)
+            n, miss = _process_code(
+                db,
+                browser,
+                cfg,
+                code,
+                works_download_cnt=works_by_code.get(code),
+            )
             db.commit()
             logger.info("%s 已提交 MySQL", code)
             link_count += n
