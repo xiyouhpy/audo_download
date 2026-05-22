@@ -5,13 +5,18 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
-PYTHON="${PYTHON:-python3.11}"
-if ! command -v "$PYTHON" >/dev/null 2>&1; then
-  PYTHON=python3
-fi
-
 LOG_FILE="./log/cron_download.log"
 mkdir -p "$(dirname "$LOG_FILE")"
+
+if [ -x "./venv/bin/python" ]; then
+  PYTHON="./venv/bin/python"
+else
+  PYTHON="${PYTHON:-python3.11}"
+  if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    PYTHON=python3
+  fi
+fi
+echo "使用 Python: $PYTHON" >> "$LOG_FILE"
 
 # 默认：发行日期为今天起连续 7 天（含今天，至今天+6）
 START_DATE="${START_DATE:-$(date +%Y-%m-%d)}"

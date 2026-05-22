@@ -33,6 +33,9 @@ python3.11 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ./venv/bin/python -m playwright install chromium
 
+# VM/本机环境自检（务必用与抓取相同的 python）
+./venv/bin/python scripts/check_env.py
+
 # 编辑 app/settings.py：MYSQL_PASSWORD、SPIDER_HOST、DOWNLOAD_HOST 等
 mysql -u root -p <库名> < app/schema.mysql.sql
 
@@ -52,6 +55,8 @@ START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
 ```
 
 日志：`log/download.log`、`log/cron_download.log`
+
+**VM 抓取无结果时**：先 `python3 scripts/check_env.py`（或 `./venv/bin/python`）；确认 Chromium 已安装。搜索失败时会在 `log/laowang_debug/` 保存 HTML 快照，日志含 `signals=`、`challenge=` 字段。勿混用系统 `python3` 与 venv（Playwright 浏览器按解释器安装）。
 
 抓取任务**每处理完一个番号立即提交 MySQL**（无需全部跑完），日志可见 `已提交 MySQL`。
 

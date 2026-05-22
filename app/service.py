@@ -3,6 +3,7 @@ import logging
 import time
 
 from app.db import MagnetDB
+from app.env_check import log_runtime_env
 from app.laowang import LaowangBrowser
 from app.magnet_link import update_magnet_links_by_code
 from app.log_util import setup_logger
@@ -69,6 +70,7 @@ def _process_code(
 
 
 def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
+    log_runtime_env()
     works_by_code = (
         fetch_works(cfg.start_date, cfg.end_date, cfg.works_page_size)
         if not codes
