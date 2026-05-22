@@ -4,7 +4,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 from pymysql.err import OperationalError
 
-from app.parsers import normalize_code, thunder_url_md5
+from app.parsers import normalize_code
 from app.settings import PROJECT_ROOT, MySQLConfig
 
 _SCHEMA = (PROJECT_ROOT / "app" / "schema.mysql.sql").read_text(encoding="utf-8")
@@ -68,49 +68,25 @@ class MagnetDB:
         if self._conn:
             self._conn.commit()
 
-    def save_links(self, start: str, end: str, records: list[dict]) -> int:
-        rows = [
-            (
-                r["code"],
-                r["thunder_url"],
-                thunder_url_md5(r["thunder_url"]),
-                r.get("total_size_text"),
-                r.get("group_name"),
-                r.get("title"),
-                start,
-                end,
-            )
-            for r in records
-            if r.get("thunder_url")
-        ]
-        if not rows:
-            return 0
-        with self._conn.cursor() as cur:
-            cur.executemany(
-                """INSERT IGNORE INTO magnet_link
-                (code, thunder_url, thunder_url_md5, total_size_text,
-                 group_name, title, start_date, end_date)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                rows,
-            )
-            n = cur.rowcount
-        return n
-
-    def save_miss(self, start: str, end: str, code: str, reason: str) -> None:
-        with self._conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO magnet_link
-                (code, thunder_url, miss_reason, start_date, end_date)
-                VALUES (%s, NULL, %s, %s, %s)""",
-                (code, reason, start, end),
-            )
-
     _LINK_COLS = (
         "code, thunder_url, total_size_text, group_name, title, created_at"
     )
 
     def fetch_links_by_code(self, code: str) -> list[dict]:
         return self.fetch_links(code=code)
+
+    def count_download_links(self, code: str) -> int:
+        """统计番号在 magnet_link 中已有 thunder 链接条数。"""
+        norm = normalize_code(code)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) AS c FROM magnet_link
+                WHERE thunder_url IS NOT NULL
+                  AND (code = %s OR LOWER(REPLACE(code, '-', '')) = %s)""",
+                (code.strip(), norm),
+            )
+            row = cur.fetchone()
+        return int(row["c"] if row else 0)
 
     def fetch_links(
         self,

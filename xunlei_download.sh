@@ -1,9 +1,9 @@
 #!/bin/bash
-# 从 links/list API 拉取 thunder 链接并吊起本机迅雷下载
+# 从 /auto_download/links/list 拉取 thunder 链接并吊起本机迅雷下载
 # 示例：
 #   ./xunlei_download.sh
 #   MIN_SIZE=1.5 MAX_SIZE=6 ./xunlei_download.sh
-#   DOWNLOAD_API_BASE=http://127.0.0.1:8084 ./xunlei_download.sh --dry-run
+#   ./xunlei_download.sh --dry-run
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1

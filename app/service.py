@@ -4,8 +4,9 @@ import time
 
 from app.db import MagnetDB
 from app.laowang import LaowangBrowser
+from app.magnet_link import update_magnet_links_by_code
 from app.log_util import setup_logger
-from app.settings import RunConfig
+from app.settings import SKIP_DOWNLOAD_IF_COUNT_OVER, RunConfig
 from app.works import fetch_codes
 
 logger = setup_logger("auto_download", "log/download.log")
@@ -19,22 +20,47 @@ def _process_code(db: MagnetDB, browser: LaowangBrowser, cfg: RunConfig, code: s
         )
     except Exception as exc:
         logger.exception("搜索失败: %s", exc)
-        db.save_miss(cfg.start_date, cfg.end_date, code, f"error: {exc}")
+        update_magnet_links_by_code(
+            db,
+            code,
+            [{"miss_reason": f"error: {exc}"}],
+            start_date=cfg.start_date,
+            end_date=cfg.end_date,
+        )
         return 0, 1
 
     if not links:
         logger.warning("%s 无符合结果", code)
-        db.save_miss(cfg.start_date, cfg.end_date, code, "no_match")
+        update_magnet_links_by_code(
+            db,
+            code,
+            [{"miss_reason": "no_match"}],
+            start_date=cfg.start_date,
+            end_date=cfg.end_date,
+        )
         return 0, 1
 
-    n = db.save_links(cfg.start_date, cfg.end_date, links)
-    logger.info("%s 写入 %s 条（抓取 %s 条）", code, n, len(links))
+    result = update_magnet_links_by_code(
+        db,
+        code,
+        links,
+        start_date=cfg.start_date,
+        end_date=cfg.end_date,
+    )
+    n = result.links_inserted
+    logger.info(
+        "%s 写入 %s 条（抓取 %s 条），已同步 spider download_cnt=%s",
+        code,
+        n,
+        len(links),
+        n,
+    )
     return n, 0
 
 
 def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
     work_codes = codes or fetch_codes(
-        cfg.start_date, cfg.end_date, cfg.works_page_size, cfg.works_api_base
+        cfg.start_date, cfg.end_date, cfg.works_page_size
     )
     if not codes:
         logger.info("从 API 获取 %s 个番号", len(work_codes))
@@ -48,12 +74,22 @@ def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
         m.database,
     )
 
-    link_count = miss_count = 0
+    link_count = miss_count = skip_count = 0
     with MagnetDB(cfg.mysql) as db, LaowangBrowser(
-        cfg.laowang_base_url, cfg.headless
+        cfg.laowang_url, cfg.headless
     ) as browser:
         for i, code in enumerate(work_codes, 1):
             logger.info("[%s/%s] %s", i, len(work_codes), code)
+            existing = db.count_download_links(code)
+            if existing > SKIP_DOWNLOAD_IF_COUNT_OVER:
+                logger.info(
+                    "%s 库内已有 %s 条下载链接（>%s），跳过",
+                    code,
+                    existing,
+                    SKIP_DOWNLOAD_IF_COUNT_OVER,
+                )
+                skip_count += 1
+                continue
             n, miss = _process_code(db, browser, cfg, code)
             db.commit()
             logger.info("%s 已提交 MySQL", code)
@@ -61,5 +97,10 @@ def run(cfg: RunConfig, codes: list[str] | None = None) -> int:
             miss_count += miss
             time.sleep(cfg.request_delay_sec)
 
-    logger.info("完成：链接 %s 条，未命中 %s 条", link_count, miss_count)
+    logger.info(
+        "完成：链接 %s 条，未命中 %s 条，跳过 %s 条",
+        link_count,
+        miss_count,
+        skip_count,
+    )
     return 0 if link_count else 1

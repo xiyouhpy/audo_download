@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从 links/list API 拉取 thunder 链接，并吊起本机迅雷下载。"""
+"""从 /auto_download/links/list API 拉取 thunder 链接，并吊起本机迅雷下载。"""
 from __future__ import annotations
 
 import argparse
@@ -8,18 +8,15 @@ import platform
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
-
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.parsers import thunder_to_magnet  # noqa: E402
-from app.settings import load_dotenv  # noqa: E402
-
-DEFAULT_API_BASE = "http://101.42.12.171:8084"
+from app.settings import AUTO_DOWNLOAD_LINKS_LIST_URL  # noqa: E402
 THUNDER_AGENT_IDS = (
     "ThunderAgent.Agent.1",
     "ThunderAgent.ThunderAgent.1",
@@ -62,35 +59,84 @@ end run
 """
 
 
-def api_base_from_env() -> str:
-    base = os.getenv("DOWNLOAD_API_BASE", "").strip().rstrip("/")
-    return base or DEFAULT_API_BASE
-
-
 def fetch_link_page(
     client: httpx.Client,
-    base: str,
+    list_url: str,
     params: dict[str, Any],
     page: int,
 ) -> dict[str, Any]:
-    url = urljoin(base + "/", "links/list")
-    resp = client.get(url, params={**params, "page": page})
+    resp = client.get(list_url, params={**params, "page": page})
     resp.raise_for_status()
     return resp.json()
 
 
 def fetch_all_links(
     client: httpx.Client,
-    base: str,
+    list_url: str,
     params: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    data = fetch_link_page(client, base, params, page=1)
+    data = fetch_link_page(client, list_url, params, page=1)
     links = list(data.get("links") or [])
     total_pages = int(data.get("total_pages") or 1)
     for page in range(2, total_pages + 1):
-        data = fetch_link_page(client, base, params, page=page)
+        data = fetch_link_page(client, list_url, params, page=page)
         links.extend(data.get("links") or [])
     return links
+
+
+def group_links_by_code(links: list[dict]) -> list[tuple[str, list[dict]]]:
+    """保持 API 返回顺序，按番号分组。"""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    order: list[str] = []
+    for item in links:
+        code = (item.get("code") or "").strip()
+        if not code:
+            continue
+        if code not in groups:
+            order.append(code)
+        groups[code].append(item)
+    return [(code, groups[code]) for code in order]
+
+
+def launch_code_tasks(
+    items: list[dict],
+    method: str,
+    *,
+    save_path: str,
+    auto: bool,
+    confirm_delay: float,
+    mac_ui_confirm: bool,
+    delay: float,
+) -> int:
+    """吊起一个番号下的全部任务，返回成功条数。"""
+    with_url = [it for it in items if (it.get("thunder_url") or "").strip()]
+    if not with_url:
+        return 0
+
+    urls = [(it.get("thunder_url") or "").strip() for it in with_url]
+
+    if method == "com" and len(urls) > 1:
+        _launch_windows_com_batch(urls, save_path=save_path, auto=auto)
+        return len(urls)
+
+    ok = 0
+    for i, it in enumerate(with_url):
+        url = (it.get("thunder_url") or "").strip()
+        try:
+            launch_thunder_url(
+                url,
+                method,
+                save_path=save_path,
+                auto=auto,
+                confirm_delay=confirm_delay,
+                mac_ui_confirm=mac_ui_confirm,
+            )
+            ok += 1
+        except Exception as exc:
+            print(f"    失败: {exc}", file=sys.stderr)
+        if i < len(with_url) - 1 and delay > 0:
+            time.sleep(delay)
+    return ok
 
 
 def task_url(thunder_url: str, prefer_magnet: bool) -> str:
@@ -275,18 +321,13 @@ def launch_thunder_url(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="从 API 拉取 thunder 链接并吊起迅雷下载")
-    p.add_argument(
-        "--api-base",
-        default=None,
-        help=f"API 根地址（默认 DOWNLOAD_API_BASE 或 {DEFAULT_API_BASE}）",
-    )
     p.add_argument("--min-size", type=float, default=1.5, help="最小体积 GB（含）")
     p.add_argument("--max-size", type=float, default=6.0, help="最大体积 GB（含）")
     p.add_argument("--page-size", type=int, default=50, help="每页条数")
     p.add_argument("--create-start", default=None, help="入库起始时间")
     p.add_argument("--create-end", default=None, help="入库截止时间")
     p.add_argument("--code", default=None, help="番号筛选")
-    p.add_argument("--delay", type=float, default=1.5, help="每条任务间隔秒数")
+    p.add_argument("--delay", type=float, default=1.5, help="同番号内多条 / 番号之间的间隔秒数")
     p.add_argument("--limit", type=int, default=0, help="最多添加条数，0 表示不限制")
     p.add_argument("--save-path", default="", help="保存目录（Windows COM）")
     p.add_argument(
@@ -320,9 +361,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    load_dotenv()
     args = parse_args()
-    base = (args.api_base or api_base_from_env()).rstrip("/")
     auto = not args.no_auto
     method = resolve_method(args.method, auto)
 
@@ -344,7 +383,7 @@ def main() -> int:
     if args.code:
         params["code"] = args.code
 
-    print(f"API: {base}/links/list")
+    print(f"API: {AUTO_DOWNLOAD_LINKS_LIST_URL}")
     print(
         f"筛选: min_size={args.min_size} max_size={args.max_size} "
         f"方式={method} 自动确认={'是' if auto else '否'}"
@@ -356,78 +395,60 @@ def main() -> int:
         ensure_mac_auto_prefs()
         _print_mac_auto_hint(args.mac_ui_confirm)
 
-    try:
-        with httpx.Client(timeout=30.0) as client:
-            links = fetch_all_links(client, base, params)
-    except httpx.HTTPError as exc:
-        print(f"请求失败: {exc}", file=sys.stderr)
-        return 1
-
-    if not links:
-        print("没有符合条件的链接。")
-        return 0
-
-    if args.limit > 0:
-        links = links[: args.limit]
-
-    print(f"共 {len(links)} 条，{'预览' if args.dry_run else '开始添加'}…")
-    if args.dry_run:
-        for i, item in enumerate(links, 1):
-            url = (item.get("thunder_url") or "").strip()
-            code = item.get("code") or ""
-            print(f"[{i}] {code}")
-            print(f"  {task_url(url, prefer_magnet=auto) if url else ''}")
-        print(f"完成：{len(links)} 条")
-        return 0
-
-    ok = 0
-    thunder_urls = [
-        (item.get("thunder_url") or "").strip()
-        for item in links
-        if (item.get("thunder_url") or "").strip()
-    ]
-
-    if method == "com" and len(thunder_urls) > 1:
-        codes = [item.get("code") or "" for item in links if item.get("thunder_url")]
-        print(f"批量添加 {len(thunder_urls)} 条（COM 一次提交）…")
-        for code in codes:
-            print(f"  - {code}")
+    with httpx.Client(timeout=30.0) as client:
         try:
-            _launch_windows_com_batch(
-                thunder_urls, save_path=args.save_path, auto=auto
-            )
-            ok = len(thunder_urls)
-        except Exception as exc:
-            print(f"批量添加失败: {exc}", file=sys.stderr)
-            return 2
-        print(f"完成：成功 {ok}/{len(links)}")
-        return 0
+            links = fetch_all_links(client, AUTO_DOWNLOAD_LINKS_LIST_URL, params)
+        except httpx.HTTPError as exc:
+            print(f"请求失败: {exc}", file=sys.stderr)
+            return 1
 
-    for i, item in enumerate(links, 1):
-        url = (item.get("thunder_url") or "").strip()
-        code = item.get("code") or ""
-        size = item.get("total_size_text") or item.get("size_gb")
-        if not url:
-            print(f"[{i}] 跳过 {code}：无 thunder_url")
-            continue
-        print(f"[{i}/{len(links)}] {code} {size}")
-        try:
-            launch_thunder_url(
-                url,
-                method,
-                save_path=args.save_path,
-                auto=auto,
-                confirm_delay=args.confirm_delay,
-                mac_ui_confirm=args.mac_ui_confirm,
-            )
-            ok += 1
-        except Exception as exc:
-            print(f"  失败: {exc}", file=sys.stderr)
-        if i < len(links) and args.delay > 0:
-            time.sleep(args.delay)
+        if not links:
+            print("没有符合条件的链接。")
+            return 0
 
-    print(f"完成：成功 {ok}/{len(links)}")
-    return 0 if ok == len(links) else 2
+        if args.limit > 0:
+            links = links[: args.limit]
+
+        groups = group_links_by_code(links)
+        print(
+            f"共 {len(links)} 条 / {len(groups)} 个番号，"
+            f"{'预览' if args.dry_run else '按番号添加'}…"
+        )
+
+        if args.dry_run:
+            for gi, (code, items) in enumerate(groups, 1):
+                print(f"[{gi}] {code}（{len(items)} 条）")
+                for item in items:
+                    url = (item.get("thunder_url") or "").strip()
+                    size = item.get("total_size_text") or item.get("size_gb")
+                    print(f"  {size} {task_url(url, prefer_magnet=auto) if url else ''}")
+            print(f"完成：{len(links)} 条 / {len(groups)} 个番号")
+            return 0
+
+        ok = 0
+        total = len(links)
+        for gi, (code, items) in enumerate(groups, 1):
+            n_task = sum(
+                1 for it in items if (it.get("thunder_url") or "").strip()
+            )
+            print(f"[{gi}/{len(groups)}] {code}（{n_task} 条）")
+            try:
+                ok += launch_code_tasks(
+                    items,
+                    method,
+                    save_path=args.save_path,
+                    auto=auto,
+                    confirm_delay=args.confirm_delay,
+                    mac_ui_confirm=args.mac_ui_confirm,
+                    delay=args.delay,
+                )
+            except Exception as exc:
+                print(f"  番号失败: {exc}", file=sys.stderr)
+            if gi < len(groups) and args.delay > 0:
+                time.sleep(args.delay)
+
+    print(f"完成：成功 {ok}/{total}")
+    return 0 if ok == total else 2
 
 
 if __name__ == "__main__":

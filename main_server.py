@@ -6,12 +6,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import router
-from app.settings import api_port, load_dotenv
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    load_dotenv()
     yield
 
 
@@ -34,10 +32,9 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    load_dotenv()
     uvicorn.run(
         "main_server:app",
         host="0.0.0.0",
-        port=api_port(),
+        port=8084,
         reload=os.getenv("DOWNLOAD_API_RELOAD", "").lower() in ("1", "true", "yes"),
     )

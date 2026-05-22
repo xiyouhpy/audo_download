@@ -13,11 +13,6 @@ fi
 LOG_FILE="./log/cron_download.log"
 mkdir -p "$(dirname "$LOG_FILE")"
 
-if [ ! -f .env ]; then
-  echo "错误: 未找到 .env，请执行: cp .env.example .env 并填写 MYSQL_PASSWORD" | tee -a "$LOG_FILE"
-  exit 1
-fi
-
 # 默认：发行日期为今天起连续 7 天（含今天，至今天+6）
 START_DATE="${START_DATE:-$(date +%Y-%m-%d)}"
 END_DATE="${END_DATE:-$(date -d '+6 days' +%Y-%m-%d 2>/dev/null || date -v+6d +%Y-%m-%d)}"

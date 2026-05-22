@@ -1,8 +1,11 @@
+"""作品（works）相关：通过 spider HTTP 接口拉番号、更新 download_cnt。"""
+from __future__ import annotations
+
 import logging
 
 import httpx
 
-from app.settings import WORKS_API_BASE
+from app.settings import SPIDER_WORK_DOWNLOAD_CNT_URL, SPIDER_WORKS_URL
 
 logger = logging.getLogger(__name__)
 
@@ -11,14 +14,13 @@ def fetch_codes(
     start_date: str,
     end_date: str,
     page_size: int = 100,
-    api_base: str = WORKS_API_BASE,
 ) -> list[str]:
     codes = []
     page = 1
     with httpx.Client(timeout=30.0) as client:
         while True:
             resp = client.get(
-                api_base,
+                SPIDER_WORKS_URL,
                 params={
                     "page": page,
                     "page_size": page_size,
@@ -37,3 +39,18 @@ def fetch_codes(
                 break
             page += 1
     return codes
+
+
+def update_works_download_cnt(code: str, download_cnt: int) -> None:
+    """调用 spider 接口更新作品的 download_cnt（实际写入 magnet_link 的链接条数）。"""
+    code = code.strip()
+    if not code:
+        raise ValueError("code 不能为空")
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(
+            SPIDER_WORK_DOWNLOAD_CNT_URL,
+            json={"code": code, "download_cnt": download_cnt},
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+    logger.debug("%s download_cnt=%s 已提交 spider", code, download_cnt)

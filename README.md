@@ -10,8 +10,9 @@ auto_download/
 ├── manage.sh           # API 进程管理
 ├── cron_download.sh    # 定时抓取
 ├── app/
-│   ├── settings.py     # 配置与环境变量
-│   ├── db.py           # MySQL
+│   ├── settings.py     # 地址、接口 URL、MySQL、抓取参数
+│   ├── db.py           # MySQL 连接与查询
+│   ├── magnet_link.py  # 按番号更新 magnet_link，并调 spider 同步 download_cnt
 │   ├── parsers.py      # HTML 解析、thunder/MD5
 │   ├── laowang.py      # Playwright 抓取
 │   ├── works.py        # 作品 API
@@ -32,7 +33,7 @@ python3.11 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ./venv/bin/python -m playwright install chromium
 
-cp .env.example .env   # 填写 MYSQL_PASSWORD 等
+# 编辑 app/settings.py：MYSQL_PASSWORD、SPIDER_HOST、DOWNLOAD_HOST 等
 mysql -u root -p <库名> < app/schema.mysql.sql
 
 chmod +x cron_download.sh manage.sh
@@ -52,28 +53,45 @@ START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
 
 日志：`log/download.log`、`log/cron_download.log`
 
-抓取任务**每处理完一个番号立即提交 MySQL**（无需等 2354 个全部跑完），日志可见 `已提交 MySQL`。
+抓取任务**每处理完一个番号立即提交 MySQL**（无需全部跑完），日志可见 `已提交 MySQL`。
+
+服务地址与接口 URL 均在 `app/settings.py` 顶部配置（改 `SPIDER_HOST` / `DOWNLOAD_HOST` 等即可）。
+
+抓取时若某番号在 `magnet_link` 中已有下载链接数 **大于** `SKIP_DOWNLOAD_IF_COUNT_OVER`（默认 3），则跳过该番号。
 
 ### 查询 API
 
+URL 规则与 spider 服务相同（`/服务名/资源`），本服务前缀为 **`/auto_download`**（对照 `http://101.42.12.171:8082/spider/works`）。
+
 ```bash
 ./manage.sh start
-curl "http://127.0.0.1:8084/health"
+curl "http://127.0.0.1:8084/auto_download/health"
 
-# 按番号查（体积可选）
-curl "http://127.0.0.1:8084/links?code=JUFE-621&min_size=1.5&max_size=3"
+# 按番号查列表（路径参数 + 分页）
+curl "http://127.0.0.1:8084/auto_download/links/code/SNOS-239"
+curl "http://127.0.0.1:8084/auto_download/links/code/SNOS239?min_size=1.5&max_size=6&page=1&page_size=50"
 
-# 抓取列表：按入库时间、体积、番号筛选（分页）
-curl "http://127.0.0.1:8084/links/list?create_start=2026-05-01&create_end=2026-05-21"
-curl "http://127.0.0.1:8084/links/list?min_size=1.5&max_size=3&page=1&page_size=50"
-curl "http://127.0.0.1:8084/links/list?create_start=2026-05-20&code=JUFE-621"
+# 按番号查（query 参数，全量不分页）
+curl "http://127.0.0.1:8084/auto_download/links?code=JUFE-621&min_size=1.5&max_size=3"
+
+# 链接列表：按入库时间、体积、番号筛选（分页）
+curl "http://127.0.0.1:8084/auto_download/links/list?create_start=2026-05-01&create_end=2026-05-21"
+curl "http://127.0.0.1:8084/auto_download/links/list?min_size=1.5&max_size=3&page=1&page_size=50"
+curl "http://127.0.0.1:8084/auto_download/links/list?code=JUFE-621"
 ```
 
-端口：`.env` 中 `DOWNLOAD_API_PORT`（默认 8084）。
+| 接口 | 说明 |
+|------|------|
+| `GET /auto_download/health` | 健康检查 |
+| `GET /auto_download/links/code/{code}` | 按番号查列表（忽略横线、大小写），支持体积筛选与分页 |
+| `GET /auto_download/links?code=` | 按番号查，一次返回全部链接 |
+| `GET /auto_download/links/list` | 全库列表，可选 `code`、入库时间、体积筛选 |
+
+监听端口：8084（在 `main_server.py` 中启动）；客户端访问地址见 `DOWNLOAD_HOST`（如 `127.0.0.1:8084`）。
 
 ### 吊起迅雷下载
 
-从 `links/list` 拉取链接，**默认自动确认并立即开始下载**（`--method auto`）：
+从 `/auto_download/links/list` 拉取链接，**按番号分组**：同一番号多条一次提交迅雷（Windows COM 批量）。默认自动确认并立即开始（`--method auto`）：
 
 | 平台 | 行为 |
 |------|------|
@@ -89,8 +107,7 @@ chmod +x xunlei_download.sh
 # 只预览
 ./xunlei_download.sh --dry-run
 
-# 改用其它 API 地址时
-DOWNLOAD_API_BASE=http://127.0.0.1:8084 ./xunlei_download.sh
+# 改地址见 app/settings.py
 
 # 恢复旧行为（会弹出迅雷确认框）
 ./xunlei_download.sh --no-auto --method open

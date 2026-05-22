@@ -1,4 +1,3 @@
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -6,61 +5,58 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GB = 1024**3
 
-WORKS_API_BASE = "http://101.42.12.171:8082/spider/works"
-LAOWANG_BASE_URL = "https://laowangjz.top"
+# --- 服务地址 host:port（部署时改这里）---
+SPIDER_HOST = "127.0.0.1:8082"
+DOWNLOAD_HOST = "127.0.0.1:8084"
+
+# --- 对外 HTTP 接口（其它模块直接 import）---
+SPIDER_WORKS_URL = f"http://{SPIDER_HOST}/spider/works"
+SPIDER_WORK_DOWNLOAD_CNT_URL = f"http://{SPIDER_HOST}/spider/work/download_cnt"
+AUTO_DOWNLOAD_LINKS_LIST_URL = f"http://{DOWNLOAD_HOST}/auto_download/links/list"
+
+API_PREFIX = "/auto_download"
+
+# 老王搜索
+LAOWANG_URL = "https://laowangjz.top"
+
+# MySQL
+MYSQL_HOST = "127.0.0.1"
+MYSQL_PORT = 3306
+MYSQL_USER = "root"
+MYSQL_PASSWORD = ""
+MYSQL_DATABASE = "auto_download"
+
+# 抓取默认参数
 MIN_SIZE_GB = 1.5
 MAX_LINKS_PER_CODE = 20
 DEFAULT_PAGE_SIZE = 100
 REQUEST_DELAY_SEC = 2.0
-API_PORT = 8084
+# 库内该番号已有下载链接数超过此值则跳过抓取（视为已下载过）
+SKIP_DOWNLOAD_IF_COUNT_OVER = 3
 
 
 def gb_to_bytes(gb: float) -> int:
     return int(gb * GB)
 
 
-def load_dotenv() -> None:
-    path = PROJECT_ROOT / ".env"
-    if not path.is_file():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-def api_port() -> int:
-    return int(os.getenv("DOWNLOAD_API_PORT", str(API_PORT)))
-
-
 @dataclass
 class MySQLConfig:
-    host: str = "127.0.0.1"
-    port: int = 3306
-    user: str = "root"
-    password: str = ""
-    database: str = "auto_download"
+    host: str = MYSQL_HOST
+    port: int = MYSQL_PORT
+    user: str = MYSQL_USER
+    password: str = MYSQL_PASSWORD
+    database: str = MYSQL_DATABASE
     charset: str = "utf8mb4"
 
     @classmethod
     def from_env(cls) -> "MySQLConfig":
-        return cls(
-            host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-            port=int(os.getenv("MYSQL_PORT", "3306")),
-            user=os.getenv("MYSQL_USER", "root"),
-            password=os.getenv("MYSQL_PASSWORD", ""),
-            database=os.getenv("MYSQL_DATABASE", "auto_download"),
-        )
+        return cls()
 
     def validate(self) -> None:
         if self.password:
             return
         print(
-            "MySQL 未配置密码。请在项目根目录创建 .env 并填写 MYSQL_PASSWORD，"
+            "MySQL 未配置密码。请在 app/settings.py 填写 MYSQL_PASSWORD，"
             "或使用 --mysql-password。",
             file=sys.stderr,
         )
@@ -73,12 +69,11 @@ class RunConfig:
     end_date: str
     mysql: MySQLConfig
     works_page_size: int = DEFAULT_PAGE_SIZE
-    laowang_base_url: str = LAOWANG_BASE_URL
+    laowang_url: str = LAOWANG_URL
     min_size_gb: float = MIN_SIZE_GB
     max_links_per_code: int = MAX_LINKS_PER_CODE
     request_delay_sec: float = REQUEST_DELAY_SEC
     headless: bool = True
-    works_api_base: str = WORKS_API_BASE
 
     @property
     def min_size_bytes(self) -> int:

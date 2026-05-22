@@ -5,13 +5,12 @@ import sys
 from app.service import run
 from app.settings import (
     DEFAULT_PAGE_SIZE,
-    LAOWANG_BASE_URL,
+    LAOWANG_URL,
     MAX_LINKS_PER_CODE,
     MIN_SIZE_GB,
     REQUEST_DELAY_SEC,
     MySQLConfig,
     RunConfig,
-    load_dotenv,
 )
 
 
@@ -37,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE)
     p.add_argument("--min-size-gb", type=float, default=MIN_SIZE_GB)
     p.add_argument("--max-links", type=int, default=MAX_LINKS_PER_CODE)
-    p.add_argument("--base-url", default=LAOWANG_BASE_URL)
+    p.add_argument("--base-url", default=LAOWANG_URL)
     p.add_argument("--delay", type=float, default=REQUEST_DELAY_SEC)
     p.add_argument("--headed", action="store_true")
     p.add_argument("--codes", nargs="*")
@@ -50,14 +49,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_dotenv()
     args = build_parser().parse_args(argv)
     cfg = RunConfig(
         start_date=args.start_date,
         end_date=args.end_date,
         mysql=_apply_mysql_overrides(MySQLConfig.from_env(), args),
         works_page_size=args.page_size,
-        laowang_base_url=args.base_url,
+        laowang_url=args.base_url,
         min_size_gb=args.min_size_gb,
         max_links_per_code=args.max_links,
         request_delay_sec=args.delay,

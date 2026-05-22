@@ -6,14 +6,14 @@ from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
 
 from app.parsers import SearchItem, magnet_to_thunder, make_soup, parse_search_results
-from app.settings import LAOWANG_BASE_URL
+from app.settings import LAOWANG_URL
 
 logger = logging.getLogger(__name__)
 _CHALLENGE = ("Checking your browser", "recaptcha", "Bot Challenge")
 
 
 class LaowangBrowser:
-    def __init__(self, base_url: str = LAOWANG_BASE_URL, headless: bool = True):
+    def __init__(self, base_url: str = LAOWANG_URL, headless: bool = True):
         self.base_url = base_url.rstrip("/")
         self.headless = headless
         self._pw = self._browser = self._ctx = self._page = None
