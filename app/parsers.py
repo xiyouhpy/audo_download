@@ -69,26 +69,44 @@ class SearchItem:
     title: str
 
 
+_VIDEO_EXTS = (".mp4", ".mkv")
+
+
+def _panel_matches_code(panel, code: str) -> bool:
+    group = _group_name(panel)
+    if code_in_text(code, group):
+        return True
+    heading = panel.select_one(".panel-heading h3.panel-title a")
+    if heading and code_in_text(code, heading.get_text(" ", strip=True)):
+        return True
+    return False
+
+
+def _has_video_file(files: list[str]) -> bool:
+    return any(
+        any(ext in f.lower() for ext in _VIDEO_EXTS) for f in files
+    )
+
+
 def parse_search_results(html: str, code: str) -> list[SearchItem]:
     items = []
     for panel in make_soup(html).select("div.panel.search-panel"):
         heading = panel.select_one(".panel-heading h3.panel-title a")
         if not heading or not heading.get("href", "").startswith("/detail/"):
             continue
-        group = _group_name(panel)
-        if not code_in_text(code, group):
+        if not _panel_matches_code(panel, code):
             continue
         files = [
             li.find("span").get_text(" ", strip=True)
             for li in panel.select(".panel-body ul.list-unstyled > li")
             if li.find("span") and li.find("span").get_text(strip=True)
         ]
-        if not any(".mp4" in f.lower() for f in files):
+        if files and not _has_video_file(files):
             continue
         size_text, size_bytes = _footer_size(panel)
         items.append(
             SearchItem(
-                group_name=group,
+                group_name=_group_name(panel),
                 detail_path=heading["href"],
                 total_size=size_bytes,
                 total_size_text=size_text,
@@ -118,7 +136,7 @@ def _footer_size(panel) -> tuple[str, int]:
     if not footer:
         return "", 0
     m = re.search(
-        r"文件大小:\s*([\d.]+\s*(?:B|KB|MB|GB|TB|Byte|Bytes))",
+        r"(?:文件大小|大小|Size)[:：]?\s*([\d.]+\s*(?:B|KB|MB|GB|TB|Byte|Bytes))",
         footer.get_text(" ", strip=True),
         re.I,
     )

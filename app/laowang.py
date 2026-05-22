@@ -9,7 +9,11 @@ from app.parsers import SearchItem, magnet_to_thunder, make_soup, parse_search_r
 from app.settings import LAOWANG_URL
 
 logger = logging.getLogger(__name__)
-_CHALLENGE = ("Checking your browser", "recaptcha", "Bot Challenge")
+_CHALLENGE = ("Checking your browser", "recaptcha", "Bot Challenge", "网址安全中心")
+_MAGNET_PATTERNS = (
+    r"magnet:\?xt=[^\s\"'<>]+",
+    r"thunder://[A-Za-z0-9+/=]+",
+)
 
 
 class LaowangBrowser:
@@ -29,7 +33,7 @@ class LaowangBrowser:
             locale="zh-CN",
         )
         self._page = self._ctx.new_page()
-        self._pass_challenge()
+        self._ready_search_page()
         return self
 
     def __exit__(self, *args):
@@ -40,16 +44,22 @@ class LaowangBrowser:
         if self._pw:
             self._pw.stop()
 
-    def _pass_challenge(self):
-        logger.info("通过首页反爬…")
+    def _ready_search_page(self) -> None:
+        logger.info("打开老王并等待搜索页…")
         self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=90000)
-        for _ in range(25):
-            if not any(m in self._page.content() for m in _CHALLENGE):
+        for _ in range(40):
+            if self._page.locator('input[name="keyword"]').count():
                 return
+            if any(m in self._page.content() for m in _CHALLENGE):
+                time.sleep(1)
+                continue
             time.sleep(1)
+        raise RuntimeError("无法进入老王搜索页（无 keyword 输入框）")
 
     def search(self, code: str, page_num: int = 1) -> str:
         self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
+        if not self._page.locator('input[name="keyword"]').count():
+            self._ready_search_page()
         time.sleep(1)
         self._page.fill('input[name="keyword"]', code)
         if page_num > 1:
@@ -79,15 +89,28 @@ class LaowangBrowser:
             if 1 < p <= 5:
                 html += self.search(code, p)
 
+        parsed = parse_search_results(html, code)
+        logger.info("%s 搜索解析 %s 条", code, len(parsed))
         hits = sorted(
-            [x for x in parse_search_results(html, code) if x.total_size >= min_bytes],
+            [x for x in parsed if x.total_size >= min_bytes],
             key=lambda x: x.total_size,
         )[:max_links]
+        if parsed and not hits:
+            sizes = ", ".join(x.total_size_text or "?" for x in parsed[:5])
+            logger.warning(
+                "%s 有 %s 条结果但均小于体积阈值（%s bytes），示例: %s",
+                code,
+                len(parsed),
+                min_bytes,
+                sizes,
+            )
 
         out = []
+        magnet_fail = 0
         for item in hits:
             magnet = self._fetch_magnet(item)
             if not magnet:
+                magnet_fail += 1
                 continue
             out.append(
                 {
@@ -99,7 +122,25 @@ class LaowangBrowser:
                 }
             )
             time.sleep(0.5)
+        if hits and not out:
+            logger.warning(
+                "%s %s 条符合体积的结果均未解析到 magnet", code, len(hits)
+            )
+        elif magnet_fail:
+            logger.info("%s magnet 失败 %s/%s 条", code, magnet_fail, len(hits))
         return out
+
+    def _extract_magnet(self, html: str) -> str | None:
+        from app.parsers import thunder_to_magnet
+
+        for pattern in _MAGNET_PATTERNS:
+            if m := re.findall(pattern, html, flags=re.I):
+                url = m[0]
+                if url.lower().startswith("magnet:"):
+                    return url
+                if url.lower().startswith("thunder://"):
+                    return thunder_to_magnet(url)
+        return None
 
     def _fetch_magnet(self, item: SearchItem) -> str | None:
         page = self._ctx.new_page()
@@ -110,12 +151,19 @@ class LaowangBrowser:
                 timeout=90000,
                 referer=self._page.url,
             )
-            for _ in range(20):
-                html = page.content()
-                if m := re.findall(r"magnet:\?xt=[^\s\"'<>]+", html):
-                    return m[0]
+            try:
+                page.wait_for_selector(
+                    "a[href^='magnet:'], a[href^='thunder://']",
+                    timeout=20000,
+                )
+            except Exception:
+                pass
+            for _ in range(15):
+                magnet = self._extract_magnet(page.content())
+                if magnet:
+                    return magnet
                 time.sleep(1)
         finally:
             page.close()
-        logger.warning("未获取 magnet: %s", item.detail_path)
+        logger.warning("未获取 magnet: %s %s", item.detail_path, item.title)
         return None
