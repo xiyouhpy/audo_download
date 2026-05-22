@@ -56,7 +56,7 @@ START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
 
 日志：`log/download.log`、`log/cron_download.log`
 
-**VM 抓取无结果时**：先 `python3 scripts/check_env.py`（或 `./venv/bin/python`）；确认 Chromium 已安装。搜索失败时会在 `log/laowang_debug/` 保存 HTML 快照，日志含 `signals=`、`challenge=` 字段。勿混用系统 `python3` 与 venv（Playwright 浏览器按解释器安装）。
+抓取优先**表单搜索**，失败再**直连** `/search?keyword=`；失败 HTML 在 `log/laowang_debug/`。
 
 抓取任务**每处理完一个番号立即提交 MySQL**（无需全部跑完），日志可见 `已提交 MySQL`。
 

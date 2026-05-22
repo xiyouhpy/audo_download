@@ -4,11 +4,11 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 from playwright.sync_api import sync_playwright
 
-from app.env_check import log_playwright_check, log_runtime_env
+from app.env_check import log_playwright_check
 from app.parsers import SearchItem, magnet_to_thunder, make_soup, parse_search_results
 from app.settings import LAOWANG_URL, PROJECT_ROOT
 
@@ -64,6 +64,10 @@ def _save_debug_html(code: str, stage: str, html: str) -> Path:
     return path
 
 
+def _has_search_panels(html: str) -> bool:
+    return bool(make_soup(html).select("div.panel.search-panel"))
+
+
 class LaowangBrowser:
     def __init__(self, base_url: str = LAOWANG_URL, headless: bool = True):
         self.base_url = base_url.rstrip("/")
@@ -95,13 +99,36 @@ class LaowangBrowser:
         if self._pw:
             self._pw.stop()
 
+    def _safe_page_html(self) -> str | None:
+        """页面跳转过程中 content() 会失败，短暂等待后重试。"""
+        for _ in range(30):
+            try:
+                return self._page.content()
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "navigating" in msg or "changing the content" in msg:
+                    try:
+                        self._page.wait_for_load_state(
+                            "domcontentloaded", timeout=5000
+                        )
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    continue
+                logger.debug("读取页面 HTML 失败: %s", exc)
+                time.sleep(1)
+        return None
+
     def _log_page_state(self, code: str, stage: str, *, save_html: bool = False) -> None:
         try:
             url = self._page.url
             title = self._page.title()
-            html = self._page.content()
+            html = self._safe_page_html()
         except Exception as exc:
             logger.warning("%s [%s] 无法读取页面: %s", code, stage, exc)
+            return
+        if not html:
+            logger.warning("%s [%s] 页面 HTML 为空", code, stage)
             return
         sig = _page_signals(html)
         markers = [m for m in _CHALLENGE if m.lower() in html.lower()]
@@ -125,8 +152,8 @@ class LaowangBrowser:
             if self._page.locator('input[name="keyword"]').count():
                 logger.info("搜索页就绪（等待 %s 秒）", i)
                 return
-            html = self._page.content()
-            if any(m in html for m in _CHALLENGE):
+            html = self._safe_page_html()
+            if html and any(m in html for m in _CHALLENGE):
                 time.sleep(1)
                 continue
             time.sleep(1)
@@ -153,7 +180,10 @@ class LaowangBrowser:
         start = time.time()
         last_log = 0.0
         while time.time() - start < timeout_sec:
-            html = self._page.content()
+            html = self._safe_page_html()
+            if not html:
+                time.sleep(1)
+                continue
             panels = make_soup(html).select("div.panel.search-panel")
             if panels:
                 logger.info(
@@ -166,11 +196,15 @@ class LaowangBrowser:
             elapsed = time.time() - start
             if elapsed - last_log >= 15:
                 sig = _page_signals(html)
+                try:
+                    url = self._page.url
+                except Exception:
+                    url = "?"
                 logger.info(
                     "%s 等待搜索结果 %.0fs… url=%s signals=%s",
                     code,
                     elapsed,
-                    self._page.url,
+                    url,
                     sig,
                 )
                 last_log = elapsed
@@ -178,11 +212,33 @@ class LaowangBrowser:
         logger.warning("%s 等待 search-panel 超时 %.0fs", code, timeout_sec)
         return False
 
-    def search(self, code: str, page_num: int = 1, *, _retry: bool = False) -> str:
+    def _search_url(self, code: str, page_num: int = 1) -> str:
+        url = f"{self.base_url}/search?keyword={quote(code)}"
+        if page_num > 1:
+            url += f"&p={page_num}"
+        return url
+
+    def _search_via_direct_url(self, code: str, page_num: int) -> str | None:
+        url = self._search_url(code, page_num)
+        logger.info("%s 直连搜索 page=%s url=%s", code, page_num, url)
+        self._page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=90000,
+            referer=f"{self.base_url}/",
+        )
+        self._wait_search_results(code, timeout_sec=30)
+        html = self._safe_page_html()
+        if html and _has_search_panels(html):
+            logger.info("%s 直连搜索成功 search-panel 已出现", code)
+            return html
+        if html:
+            self._log_page_state(code, f"direct_empty_p{page_num}", save_html=True)
+        return None
+
+    def _search_via_form(self, code: str, page_num: int) -> str | None:
         if not self._page.locator('input[name="keyword"]').count():
-            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-            if not self._page.locator('input[name="keyword"]').count():
-                self._ready_search_page()
+            self._ready_search_page()
         time.sleep(1)
         self._page.fill('input[name="keyword"]', code)
         if page_num > 1:
@@ -190,29 +246,38 @@ class LaowangBrowser:
                 f"() => {{ const p = document.querySelector('input[name=p]');"
                 f" if (p) p.value = '{page_num}'; }}"
             )
-        logger.info("%s 提交搜索 page=%s retry=%s", code, page_num, _retry)
+        logger.info("%s 表单搜索 page=%s", code, page_num)
+        self._click_search()
         try:
-            with self._page.expect_navigation(
-                timeout=90000, wait_until="domcontentloaded"
-            ):
-                self._click_search()
+            self._page.wait_for_load_state("domcontentloaded", timeout=90000)
         except Exception as exc:
-            logger.info("%s 搜索未触发导航（可能页内刷新）: %s", code, exc)
-            self._click_search()
+            logger.info("%s 等待 domcontentloaded: %s", code, exc)
         self._wait_search_results(code, timeout_sec=90)
-        time.sleep(1)
-        html = self._page.content()
-        panels = make_soup(html).select("div.panel.search-panel")
-        if page_num == 1 and not panels:
-            self._log_page_state(code, f"search_empty_p{page_num}", save_html=True)
-        if (
-            not _retry
-            and page_num == 1
-            and not panels
-        ):
-            logger.warning("%s 搜索无结果块，重新进入搜索页后重试", code)
+        html = self._safe_page_html()
+        if html and _has_search_panels(html):
+            logger.info("%s 表单搜索成功 search-panel 已出现", code)
+            return html
+        if html:
+            self._log_page_state(code, f"form_empty_p{page_num}", save_html=True)
+        return None
+
+    def search(self, code: str, page_num: int = 1) -> str:
+        """表单提交优先（本地可靠）；无结果时再直连 /search?keyword=（VM 回退）。"""
+        if page_num == 1 and not self._page.locator('input[name="keyword"]').count():
             self._ready_search_page()
-            return self.search(code, page_num, _retry=True)
+        html = self._search_via_form(code, page_num)
+        if html:
+            return html
+        logger.warning("%s 表单无结果，改直连搜索 page=%s", code, page_num)
+        html = self._search_via_direct_url(code, page_num)
+        if html:
+            return html
+        html = self._safe_page_html() or ""
+        if not _has_search_panels(html):
+            logger.warning(
+                "%s 表单与直连均无 search-panel（可能 VM IP 被拦，见 log/laowang_debug/）",
+                code,
+            )
         return html
 
     def collect_links(

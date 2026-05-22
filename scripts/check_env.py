@@ -35,7 +35,17 @@ def main() -> int:
             kw = page.locator('input[name="keyword"]').count()
             title = page.title()
             html_len = len(page.content())
-            print(f"laowang: title={title!r} html_len={html_len} keyword_inputs={kw}")
+            print(
+                f"laowang_home: title={title!r} html_len={html_len} keyword_inputs={kw}"
+            )
+            search_url = f"{LAOWANG_URL.rstrip('/')}/search?keyword=MIDA-636"
+            page.goto(search_url, wait_until="domcontentloaded", timeout=90000)
+            html = page.content()
+            print(
+                f"laowang_search: url={page.url} html_len={len(html)} "
+                f"search_panel={'search-panel' in html} "
+                f"为您索检={'为您索检' in html}"
+            )
             browser.close()
     except Exception as exc:
         print(f"WARN: 老王首页探测失败: {exc}", file=sys.stderr)
