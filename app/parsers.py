@@ -79,13 +79,19 @@ def _panel_matches_code(panel, code: str) -> bool:
     heading = panel.select_one(".panel-heading h3.panel-title a")
     if heading and code_in_text(code, heading.get_text(" ", strip=True)):
         return True
+    for li in panel.select(".panel-body ul.list-unstyled > li"):
+        span = li.find("span")
+        if span and code_in_text(code, span.get_text(" ", strip=True)):
+            return True
     return False
 
 
 def _has_video_file(files: list[str]) -> bool:
-    return any(
-        any(ext in f.lower() for ext in _VIDEO_EXTS) for f in files
-    )
+    for name in files:
+        compact = re.sub(r"\s+", "", name.lower())
+        if any(ext in compact for ext in _VIDEO_EXTS):
+            return True
+    return False
 
 
 def parse_search_results(html: str, code: str) -> list[SearchItem]:

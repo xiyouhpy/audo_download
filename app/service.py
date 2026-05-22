@@ -9,7 +9,7 @@ from app.log_util import setup_logger
 from app.settings import SKIP_DOWNLOAD_IF_COUNT_OVER, RunConfig
 from app.works import fetch_works
 
-logger = setup_logger("auto_download", "log/download.log")
+logger = setup_logger("app.service", "log/download.log")
 
 
 def _process_code(

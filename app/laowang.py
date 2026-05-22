@@ -1,5 +1,6 @@
 import logging
 import re
+import sys
 import time
 from urllib.parse import urljoin
 
@@ -14,6 +15,9 @@ _MAGNET_PATTERNS = (
     r"magnet:\?xt=[^\s\"'<>]+",
     r"thunder://[A-Za-z0-9+/=]+",
 )
+_CHROMIUM_ARGS = ["--disable-blink-features=AutomationControlled"]
+if sys.platform == "linux":
+    _CHROMIUM_ARGS.extend(["--no-sandbox", "--disable-setuid-sandbox"])
 
 
 class LaowangBrowser:
@@ -24,7 +28,9 @@ class LaowangBrowser:
 
     def __enter__(self):
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
+        self._browser = self._pw.chromium.launch(
+            headless=self.headless, args=_CHROMIUM_ARGS
+        )
         self._ctx = self._browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -56,7 +62,7 @@ class LaowangBrowser:
             time.sleep(1)
         raise RuntimeError("无法进入老王搜索页（无 keyword 输入框）")
 
-    def search(self, code: str, page_num: int = 1) -> str:
+    def search(self, code: str, page_num: int = 1, *, _retry: bool = False) -> str:
         self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
         if not self._page.locator('input[name="keyword"]').count():
             self._ready_search_page()
@@ -69,11 +75,23 @@ class LaowangBrowser:
             )
         self._page.click("button.search-btn")
         try:
-            self._page.wait_for_selector("text=为您索检", timeout=90000)
+            self._page.wait_for_selector("div.panel.search-panel", timeout=60000)
         except Exception:
-            self._page.wait_for_load_state("networkidle", timeout=90000)
+            try:
+                self._page.wait_for_selector("text=为您索检", timeout=60000)
+            except Exception:
+                self._page.wait_for_load_state("networkidle", timeout=60000)
         time.sleep(1)
-        return self._page.content()
+        html = self._page.content()
+        if (
+            not _retry
+            and page_num == 1
+            and not make_soup(html).select("div.panel.search-panel")
+        ):
+            logger.warning("%s 搜索无结果块，重新进入搜索页后重试", code)
+            self._ready_search_page()
+            return self.search(code, page_num, _retry=True)
+        return html
 
     def collect_links(
         self, code: str, min_bytes: int, max_links: int = 20
@@ -89,8 +107,20 @@ class LaowangBrowser:
             if 1 < p <= 5:
                 html += self.search(code, p)
 
+        panel_count = len(
+            make_soup(html).select("div.panel.search-panel")
+        )
         parsed = parse_search_results(html, code)
-        logger.info("%s 搜索解析 %s 条", code, len(parsed))
+        logger.info(
+            "%s 页面 search-panel=%s，解析 %s 条",
+            code,
+            panel_count,
+            len(parsed),
+        )
+        if panel_count and not parsed:
+            logger.warning("%s 有结果块但解析为 0（番号/格式过滤）", code)
+        if not panel_count:
+            logger.warning("%s 搜索页无 search-panel（可能未进入老王搜索页）", code)
         hits = sorted(
             [x for x in parsed if x.total_size >= min_bytes],
             key=lambda x: x.total_size,
