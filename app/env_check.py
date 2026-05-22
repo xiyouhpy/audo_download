@@ -7,18 +7,30 @@ import platform
 import sys
 
 logger = logging.getLogger(__name__)
+_logged_env = False
 
 
-def _pkg_version(name: str) -> str:
+def _pkg_version(distribution: str, import_name: str | None = None) -> str:
     try:
-        mod = __import__(name)
+        from importlib.metadata import version
+
+        return version(distribution)
+    except Exception:
+        pass
+    try:
+        mod = __import__(import_name or distribution)
         return getattr(mod, "__version__", "?")
     except Exception as exc:
         return f"未安装 ({exc})"
 
 
 def log_runtime_env() -> None:
-    """启动时打印 Python、系统、关键包版本。"""
+    """启动时打印 Python、系统、关键包版本（全局只打一次）。"""
+    global _logged_env
+    if _logged_env:
+        return
+    _logged_env = True
+
     logger.info("Python: %s", sys.executable)
     logger.info("版本: %s", sys.version.replace("\n", " "))
     logger.info(
@@ -27,13 +39,19 @@ def log_runtime_env() -> None:
         platform.release(),
         platform.machine(),
     )
+    has_lxml = importlib.util.find_spec("lxml") is not None
     logger.info(
         "依赖: playwright=%s beautifulsoup4=%s lxml=%s pymysql=%s",
         _pkg_version("playwright"),
-        _pkg_version("bs4"),
-        "已安装" if importlib.util.find_spec("lxml") else "未安装(将用 html.parser)",
+        _pkg_version("beautifulsoup4", "bs4"),
+        "已安装" if has_lxml else "未安装",
         _pkg_version("pymysql"),
     )
+    if not has_lxml:
+        logger.warning(
+            "lxml 未安装，HTML 解析将退化为 html.parser；建议: %s -m pip install lxml",
+            sys.executable,
+        )
 
 
 def check_playwright_chromium(headless: bool = True) -> str | None:

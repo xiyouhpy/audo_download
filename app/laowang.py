@@ -71,7 +71,6 @@ class LaowangBrowser:
         self._pw = self._browser = self._ctx = self._page = None
 
     def __enter__(self):
-        log_runtime_env()
         log_playwright_check(headless=self.headless)
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(
@@ -134,7 +133,7 @@ class LaowangBrowser:
         self._log_page_state("", "ready_search_failed", save_html=True)
         raise RuntimeError("无法进入老王搜索页（无 keyword 输入框）")
 
-    def _click_search(self) -> None:
+    def _click_search(self) -> str:
         for sel in (
             "button.search-btn",
             "button[type='submit']",
@@ -143,9 +142,41 @@ class LaowangBrowser:
         ):
             loc = self._page.locator(sel)
             if loc.count():
+                logger.info("点击搜索 selector=%s", sel)
                 loc.first.click(timeout=10000)
-                return
+                return sel
+        logger.info("未找到搜索按钮，改用 Enter 提交")
         self._page.press('input[name="keyword"]', "Enter")
+        return "Enter"
+
+    def _wait_search_results(self, code: str, timeout_sec: int = 90) -> bool:
+        start = time.time()
+        last_log = 0.0
+        while time.time() - start < timeout_sec:
+            html = self._page.content()
+            panels = make_soup(html).select("div.panel.search-panel")
+            if panels:
+                logger.info(
+                    "%s 搜索出结果 search-panel=%s (%.0fs)",
+                    code,
+                    len(panels),
+                    time.time() - start,
+                )
+                return True
+            elapsed = time.time() - start
+            if elapsed - last_log >= 15:
+                sig = _page_signals(html)
+                logger.info(
+                    "%s 等待搜索结果 %.0fs… url=%s signals=%s",
+                    code,
+                    elapsed,
+                    self._page.url,
+                    sig,
+                )
+                last_log = elapsed
+            time.sleep(2)
+        logger.warning("%s 等待 search-panel 超时 %.0fs", code, timeout_sec)
+        return False
 
     def search(self, code: str, page_num: int = 1, *, _retry: bool = False) -> str:
         if not self._page.locator('input[name="keyword"]').count():
@@ -160,22 +191,16 @@ class LaowangBrowser:
                 f" if (p) p.value = '{page_num}'; }}"
             )
         logger.info("%s 提交搜索 page=%s retry=%s", code, page_num, _retry)
-        self._click_search()
-        panel_ok = False
         try:
-            self._page.wait_for_selector("div.panel.search-panel", timeout=90000)
-            panel_ok = True
+            with self._page.expect_navigation(
+                timeout=90000, wait_until="domcontentloaded"
+            ):
+                self._click_search()
         except Exception as exc:
-            logger.info("%s 等待 search-panel 超时: %s", code, exc)
-        if not panel_ok:
-            try:
-                self._page.wait_for_selector("text=为您索检", timeout=30000)
-            except Exception:
-                try:
-                    self._page.wait_for_load_state("networkidle", timeout=30000)
-                except Exception as exc:
-                    logger.info("%s 等待 networkidle 失败: %s", code, exc)
-        time.sleep(2)
+            logger.info("%s 搜索未触发导航（可能页内刷新）: %s", code, exc)
+            self._click_search()
+        self._wait_search_results(code, timeout_sec=90)
+        time.sleep(1)
         html = self._page.content()
         panels = make_soup(html).select("div.panel.search-panel")
         if page_num == 1 and not panels:
