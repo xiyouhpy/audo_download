@@ -22,9 +22,9 @@ LAOWANG_URL = "https://laowangjz.top"
 # MySQL
 MYSQL_HOST = "127.0.0.1"
 MYSQL_PORT = 3306
-MYSQL_USER = "root"
-MYSQL_PASSWORD = ""
-MYSQL_DATABASE = "auto_download"
+MYSQL_USER = "hpy"
+MYSQL_PASSWORD = "123456"
+MYSQL_DATABASE = "web_spider"
 
 # 抓取默认参数
 MIN_SIZE_GB = 1.5
