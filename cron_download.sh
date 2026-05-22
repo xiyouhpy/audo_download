@@ -1,22 +1,20 @@
 #!/bin/bash
-# 定时下载磁力链接并写入 MySQL
+# 定时抓取磁力链接，经 spider API 写入 magnet_link
 # START_DATE=2026-04-20 END_DATE=2026-04-30 ./cron_download.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
-LOG_FILE="./log/cron_download.log"
-mkdir -p "$(dirname "$LOG_FILE")"
-
+PYTHON="${PYTHON:-python3.11}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  PYTHON=python3
+fi
 if [ -x "./venv/bin/python" ]; then
   PYTHON="./venv/bin/python"
-else
-  PYTHON="${PYTHON:-python3.11}"
-  if ! command -v "$PYTHON" >/dev/null 2>&1; then
-    PYTHON=python3
-  fi
 fi
-echo "使用 Python: $PYTHON" >> "$LOG_FILE"
+
+LOG_FILE="./log/cron_download.log"
+mkdir -p "$(dirname "$LOG_FILE")"
 
 # 默认：发行日期为今天起连续 7 天（含今天，至今天+6）
 START_DATE="${START_DATE:-$(date +%Y-%m-%d)}"
@@ -26,7 +24,7 @@ echo "=========================================" >> "$LOG_FILE"
 echo "下载任务开始 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
 echo "日期范围: $START_DATE ~ $END_DATE" >> "$LOG_FILE"
 
-"$PYTHON" cron/download_links.py \
+"$PYTHON" -m app.cli \
   --start-date "$START_DATE" \
   --end-date "$END_DATE" \
   >> "$LOG_FILE" 2>&1

@@ -1,5 +1,4 @@
 import base64
-import hashlib
 import importlib.util
 import re
 from dataclasses import dataclass
@@ -56,10 +55,6 @@ def thunder_to_magnet(url: str) -> str | None:
     return None
 
 
-def thunder_url_md5(url: str) -> str:
-    return hashlib.md5(url.encode("utf-8")).hexdigest()
-
-
 @dataclass
 class SearchItem:
     group_name: str
@@ -94,11 +89,18 @@ def _has_video_file(files: list[str]) -> bool:
     return False
 
 
-def parse_search_results(html: str, code: str) -> list[SearchItem]:
-    items = []
+def parse_search_results(html: str, code: str) -> tuple[int, list[SearchItem]]:
+    """返回 (本页 panel 总数, 符合番号/格式预期的条目)。"""
+    items: list[SearchItem] = []
+    seen_paths: set[str] = set()
+    raw = 0
     for panel in make_soup(html).select("div.panel.search-panel"):
         heading = panel.select_one(".panel-heading h3.panel-title a")
         if not heading or not heading.get("href", "").startswith("/detail/"):
+            continue
+        raw += 1
+        detail_path = heading["href"]
+        if detail_path in seen_paths:
             continue
         if not _panel_matches_code(panel, code):
             continue
@@ -110,6 +112,7 @@ def parse_search_results(html: str, code: str) -> list[SearchItem]:
         if files and not _has_video_file(files):
             continue
         size_text, size_bytes = _footer_size(panel)
+        seen_paths.add(detail_path)
         items.append(
             SearchItem(
                 group_name=_group_name(panel),
@@ -119,7 +122,7 @@ def parse_search_results(html: str, code: str) -> list[SearchItem]:
                 title=heading.get_text(" ", strip=True),
             )
         )
-    return items
+    return raw, items
 
 
 def _group_name(panel) -> str:

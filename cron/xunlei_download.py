@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从 /auto_download/links/list API 拉取 thunder 链接，并吊起本机迅雷下载。"""
+"""从 spider magnet_link/links/list API 拉取 thunder 链接，并吊起本机迅雷下载。"""
 from __future__ import annotations
 
 import argparse
@@ -16,7 +16,8 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.parsers import thunder_to_magnet  # noqa: E402
-from app.settings import AUTO_DOWNLOAD_LINKS_LIST_URL  # noqa: E402
+from app.settings import MIN_SIZE_GB, SPIDER_MAGNET_LINK_LIST_URL, XUNLEI_LIST_PAGE_SIZE  # noqa: E402
+from app.spider_client import fetch_all_links  # noqa: E402
 THUNDER_AGENT_IDS = (
     "ThunderAgent.Agent.1",
     "ThunderAgent.ThunderAgent.1",
@@ -59,31 +60,6 @@ end run
 """
 
 
-def fetch_link_page(
-    client: httpx.Client,
-    list_url: str,
-    params: dict[str, Any],
-    page: int,
-) -> dict[str, Any]:
-    resp = client.get(list_url, params={**params, "page": page})
-    resp.raise_for_status()
-    return resp.json()
-
-
-def fetch_all_links(
-    client: httpx.Client,
-    list_url: str,
-    params: dict[str, Any],
-) -> list[dict[str, Any]]:
-    data = fetch_link_page(client, list_url, params, page=1)
-    links = list(data.get("links") or [])
-    total_pages = int(data.get("total_pages") or 1)
-    for page in range(2, total_pages + 1):
-        data = fetch_link_page(client, list_url, params, page=page)
-        links.extend(data.get("links") or [])
-    return links
-
-
 def group_links_by_code(links: list[dict]) -> list[tuple[str, list[dict]]]:
     """保持 API 返回顺序，按番号分组。"""
     groups: dict[str, list[dict]] = defaultdict(list)
@@ -115,7 +91,7 @@ def launch_code_tasks(
 
     urls = [(it.get("thunder_url") or "").strip() for it in with_url]
 
-    if method == "com" and len(urls) > 1:
+    if method == "com":
         _launch_windows_com_batch(urls, save_path=save_path, auto=auto)
         return len(urls)
 
@@ -123,6 +99,7 @@ def launch_code_tasks(
     for i, it in enumerate(with_url):
         url = (it.get("thunder_url") or "").strip()
         try:
+            print(f"  → {url[:72]}{'…' if len(url) > 72 else ''}")
             launch_thunder_url(
                 url,
                 method,
@@ -214,8 +191,9 @@ def _mac_ui_confirm(confirm_delay: float) -> bool:
 def _print_mac_auto_hint(ui_confirm: bool) -> None:
     print(
         "Mac 静默：已写入迅雷偏好（自动开始、不弹主界面等）。"
-        "若仍出现确认窗，请重启迅雷后再试；"
-        "或在迅雷「偏好设置→应用→基本设置→任务管理」"
+        "任务可能在后台添加，请查看迅雷下载列表；"
+        "若仍出现确认窗，请重启迅雷后再试，或加 --mac-ui-confirm；"
+        "也可在迅雷「偏好设置→应用→基本设置→任务管理」"
         "取消「新建任务时显示主界面」。"
     )
     if ui_confirm:
@@ -228,6 +206,19 @@ def _print_mac_auto_hint(ui_confirm: bool) -> None:
             )
 
 
+def _launch_mac_thunder(thunder_url: str) -> None:
+    """Mac 迅雷注册 thunder:// 协议；先唤起客户端再投递链接。"""
+    url = thunder_url.strip()
+    if not url:
+        raise ValueError("空的 thunder 链接")
+    subprocess.run(["open", "-a", "Thunder"], check=False)
+    time.sleep(0.3)
+    result = subprocess.run(["open", url], capture_output=True, text=True)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"open 投递失败: {err or result.returncode}")
+
+
 def _launch_mac_auto(
     thunder_url: str,
     *,
@@ -235,8 +226,7 @@ def _launch_mac_auto(
     ui_confirm: bool,
 ) -> None:
     ensure_mac_auto_prefs()
-    url = task_url(thunder_url, prefer_magnet=True)
-    subprocess.run(["open", "-a", "Thunder", url], check=True)
+    _launch_mac_thunder(thunder_url)
     if ui_confirm and _mac_accessibility_ok():
         _mac_ui_confirm(confirm_delay)
 
@@ -254,22 +244,6 @@ def _get_windows_agent():
         except Exception as exc:
             last_exc = exc
     raise RuntimeError(f"无法连接迅雷 COM：{last_exc}") from last_exc
-
-
-def _launch_windows_com(
-    thunder_url: str,
-    *,
-    save_path: str,
-    auto: bool,
-) -> None:
-    agent = _get_windows_agent()
-    url = task_url(thunder_url, prefer_magnet=True)
-    start_mode = 1 if auto else 0
-    agent.AddTask(url, "", save_path, "", "", start_mode, 0, 5)
-    if auto and hasattr(agent, "CommitTasks2"):
-        agent.CommitTasks2(1)
-    else:
-        agent.CommitTasks(0)
 
 
 def _launch_windows_com_batch(
@@ -299,7 +273,9 @@ def launch_thunder_url(
     mac_ui_confirm: bool = False,
 ) -> None:
     if method == "com":
-        _launch_windows_com(thunder_url, save_path=save_path, auto=auto)
+        _launch_windows_com_batch(
+            [thunder_url], save_path=save_path, auto=auto
+        )
         return
     if method == "mac":
         _launch_mac_auto(
@@ -312,7 +288,7 @@ def launch_thunder_url(
     url = task_url(thunder_url, prefer_magnet=auto)
     system = platform.system()
     if system == "Darwin":
-        subprocess.run(["open", "-a", "Thunder", url], check=True)
+        _launch_mac_thunder(thunder_url)
     elif system == "Windows":
         os.startfile(url)  # type: ignore[attr-defined]
     else:
@@ -321,12 +297,11 @@ def launch_thunder_url(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="从 API 拉取 thunder 链接并吊起迅雷下载")
-    p.add_argument("--min-size", type=float, default=1.5, help="最小体积 GB（含）")
+    p.add_argument("--min-size", type=float, default=MIN_SIZE_GB, help="最小体积 GB（含）")
     p.add_argument("--max-size", type=float, default=6.0, help="最大体积 GB（含）")
-    p.add_argument("--page-size", type=int, default=50, help="每页条数")
+    p.add_argument("--page-size", type=int, default=XUNLEI_LIST_PAGE_SIZE, help="每页条数")
     p.add_argument("--create-start", default=None, help="入库起始时间")
     p.add_argument("--create-end", default=None, help="入库截止时间")
-    p.add_argument("--code", default=None, help="番号筛选")
     p.add_argument("--delay", type=float, default=1.5, help="同番号内多条 / 番号之间的间隔秒数")
     p.add_argument("--limit", type=int, default=0, help="最多添加条数，0 表示不限制")
     p.add_argument("--save-path", default="", help="保存目录（Windows COM）")
@@ -380,16 +355,12 @@ def main() -> int:
         params["create_start"] = args.create_start
     if args.create_end:
         params["create_end"] = args.create_end
-    if args.code:
-        params["code"] = args.code
 
-    print(f"API: {AUTO_DOWNLOAD_LINKS_LIST_URL}")
+    print(f"API: {SPIDER_MAGNET_LINK_LIST_URL}")
     print(
         f"筛选: min_size={args.min_size} max_size={args.max_size} "
         f"方式={method} 自动确认={'是' if auto else '否'}"
     )
-    if args.code:
-        print(f"番号: {args.code}")
 
     if method == "mac" and not args.dry_run:
         ensure_mac_auto_prefs()
@@ -397,7 +368,9 @@ def main() -> int:
 
     with httpx.Client(timeout=30.0) as client:
         try:
-            links = fetch_all_links(client, AUTO_DOWNLOAD_LINKS_LIST_URL, params)
+            links = fetch_all_links(
+                client, params, list_url=SPIDER_MAGNET_LINK_LIST_URL
+            )
         except httpx.HTTPError as exc:
             print(f"请求失败: {exc}", file=sys.stderr)
             return 1
