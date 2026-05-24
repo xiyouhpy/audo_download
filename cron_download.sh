@@ -24,7 +24,7 @@ echo "=========================================" >> "$LOG_FILE"
 echo "下载任务开始 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
 echo "日期范围: $START_DATE ~ $END_DATE" >> "$LOG_FILE"
 
-"$PYTHON" -m app.cli \
+"$PYTHON" -m app.cli by-date \
   --start-date "$START_DATE" \
   --end-date "$END_DATE" \
   >> "$LOG_FILE" 2>&1

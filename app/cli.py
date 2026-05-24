@@ -1,49 +1,55 @@
-"""命令行入口：磁力抓取任务。"""
+"""命令行入口：磁力抓取任务（by-date / by-code 二选一）。"""
 import argparse
 import sys
+from dataclasses import replace
+from datetime import date
 
 from app.service import run
-from app.settings import (
-    DEFAULT_PAGE_SIZE,
-    LAOWANG_URL,
-    MAX_LINKS_PER_CODE,
-    MAX_SEARCH_PAGES,
-    MIN_SIZE_GB,
-    REQUEST_DELAY_SEC,
-    RunConfig,
-)
+from app.settings import RunConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="搜索磁力并经 spider API 写入")
-    p.add_argument("--start-date", required=True)
-    p.add_argument("--end-date", required=True)
-    p.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE)
-    p.add_argument("--min-size-gb", type=float, default=MIN_SIZE_GB)
-    p.add_argument("--max-links", type=int, default=MAX_LINKS_PER_CODE)
-    p.add_argument("--max-search-pages", type=int, default=MAX_SEARCH_PAGES)
-    p.add_argument("--base-url", default=LAOWANG_URL)
-    p.add_argument("--delay", type=float, default=REQUEST_DELAY_SEC)
-    p.add_argument("--headed", action="store_true")
-    p.add_argument("--verbose", "-v", action="store_true", help="同时输出到终端")
-    p.add_argument("--codes", nargs="*")
+    p = argparse.ArgumentParser(
+        description="搜索磁力并经 spider API 写入",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  %(prog)s by-date --start-date 2026-04-20 --end-date 2026-04-30
+  %(prog)s by-code MIDA-636
+  %(prog)s by-code MIDA-636 ABC-123 -v
+""",
+    )
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="同时输出到终端",
+    )
+    sub = p.add_subparsers(dest="mode", required=True)
+
+    p_date = sub.add_parser(
+        "by-date",
+        help="按作品发行日从 spider 拉番号并抓取",
+    )
+    p_date.add_argument("--start-date", required=True, metavar="YYYY-MM-DD")
+    p_date.add_argument("--end-date", required=True, metavar="YYYY-MM-DD")
+
+    p_code = sub.add_parser("by-code", help="抓取指定番号")
+    p_code.add_argument("codes", nargs="+", metavar="CODE")
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    cfg = RunConfig(
-        start_date=args.start_date,
-        end_date=args.end_date,
-        works_page_size=args.page_size,
-        laowang_url=args.base_url,
-        min_size_gb=args.min_size_gb,
-        max_links_per_code=args.max_links,
-        max_search_pages=args.max_search_pages,
-        request_delay_sec=args.delay,
-        headless=not args.headed,
-    )
-    return run(cfg, args.codes or None, verbose=args.verbose)
+    cfg = RunConfig()
+
+    if args.mode == "by-date":
+        cfg = replace(cfg, start_date=args.start_date, end_date=args.end_date)
+        return run(cfg, codes=None, verbose=args.verbose)
+
+    today = date.today().isoformat()
+    cfg = replace(cfg, start_date=today, end_date=today)
+    return run(cfg, codes=args.codes, verbose=args.verbose)
 
 
 if __name__ == "__main__":

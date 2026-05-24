@@ -1,4 +1,5 @@
 import logging
+import random
 import re
 import time
 from urllib.parse import urljoin
@@ -20,10 +21,31 @@ _MAGNET_PATTERNS = (
     r"magnet:\?xt=[^\s\"'<>]+",
     r"thunder://[A-Za-z0-9+/=]+",
 )
-_USER_AGENT = (
+_NAV_TIMEOUT_MS = 15_000
+_CHALLENGE_POLL_S = 1.0
+_CHALLENGE_MAX_ATTEMPTS = 5
+_MAGNET_POLL_S = 0.5
+_MAGNET_MAX_ATTEMPTS = 3
+_USER_AGENTS = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) "
+    "Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) "
+    "Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 )
+
+
+def _random_user_agent() -> str:
+    return random.choice(_USER_AGENTS)
 
 
 class LaowangBrowser:
@@ -36,7 +58,7 @@ class LaowangBrowser:
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=self.headless)
         self._ctx = self._browser.new_context(
-            user_agent=_USER_AGENT,
+            user_agent=_random_user_agent(),
             locale="zh-CN",
         )
         self._page = self._ctx.new_page()
@@ -51,17 +73,25 @@ class LaowangBrowser:
         if self._pw:
             self._pw.stop()
 
+    def _apply_random_user_agent(self, page) -> None:
+        page.set_extra_http_headers({"User-Agent": _random_user_agent()})
+
     def _ready_search_page(self) -> None:
         """打开首页，等到出现搜索框（必要时等待反爬页过去）。"""
         logger.info("打开老王搜索页…")
-        self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=90000)
-        for _ in range(40):
+        self._apply_random_user_agent(self._page)
+        self._page.goto(
+            self.base_url,
+            wait_until="domcontentloaded",
+            timeout=_NAV_TIMEOUT_MS,
+        )
+        for _ in range(_CHALLENGE_MAX_ATTEMPTS):
             if self._page.locator('input[name="keyword"]').count():
                 return
             if any(m in self._page.content() for m in _CHALLENGE):
-                time.sleep(1)
+                time.sleep(_CHALLENGE_POLL_S)
                 continue
-            time.sleep(1)
+            time.sleep(_CHALLENGE_POLL_S)
         raise RuntimeError("无法进入老王搜索页（无 keyword 输入框）")
 
     def _page_numbers_from_html(self, html: str) -> list[int]:
@@ -80,13 +110,15 @@ class LaowangBrowser:
 
     def search(self, code: str, page_num: int = 1) -> str:
         on_search = self._page.locator('input[name="keyword"]').count() > 0
-        if page_num > 1 and on_search:
-            time.sleep(0.5)
-        else:
-            self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
+        if page_num == 1 or not on_search:
+            self._apply_random_user_agent(self._page)
+            self._page.goto(
+                self.base_url,
+                wait_until="domcontentloaded",
+                timeout=_NAV_TIMEOUT_MS,
+            )
             if not self._page.locator('input[name="keyword"]').count():
                 self._ready_search_page()
-            time.sleep(1)
 
         self._page.fill('input[name="keyword"]', code)
         if page_num > 1:
@@ -96,10 +128,15 @@ class LaowangBrowser:
             )
         self._page.click("button.search-btn")
         try:
-            self._page.wait_for_selector("div.panel.search-panel", timeout=90000)
+            self._page.wait_for_selector(
+                "div.panel.search-panel",
+                timeout=_NAV_TIMEOUT_MS,
+            )
         except Exception:
-            self._page.wait_for_selector("text=为您索检", timeout=60000)
-        time.sleep(1)
+            self._page.wait_for_selector(
+                "text=为您索检",
+                timeout=_NAV_TIMEOUT_MS,
+            )
         return self._page.content()
 
     def collect_links(
@@ -174,7 +211,7 @@ class LaowangBrowser:
                     "total_size_text": item.total_size_text,
                 }
             )
-            time.sleep(0.5)
+            time.sleep(0.2)
         return out
 
     def _extract_magnet(self, html: str) -> str | None:
@@ -190,17 +227,18 @@ class LaowangBrowser:
     def _fetch_magnet(self, item: SearchItem) -> str | None:
         page = self._ctx.new_page()
         try:
+            self._apply_random_user_agent(page)
             page.goto(
                 urljoin(self.base_url, item.detail_path),
                 wait_until="domcontentloaded",
-                timeout=90000,
+                timeout=_NAV_TIMEOUT_MS,
                 referer=self._page.url,
             )
-            for _ in range(15):
+            for _ in range(_MAGNET_MAX_ATTEMPTS):
                 magnet = self._extract_magnet(page.content())
                 if magnet:
                     return magnet
-                time.sleep(1)
+                time.sleep(_MAGNET_POLL_S)
         finally:
             page.close()
         logger.warning("未获取 magnet: %s", item.detail_path)

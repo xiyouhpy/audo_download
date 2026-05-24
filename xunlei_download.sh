@@ -3,7 +3,8 @@
 # 示例：
 #   ./xunlei_download.sh
 #   MIN_SIZE=1.5 MAX_SIZE=6 ./xunlei_download.sh
-#   ./xunlei_download.sh --dry-run
+#   MIN_SIZE=2 MAX_SIZE=8 ./xunlei_download.sh --codes MIDA-636
+#   ./xunlei_download.sh --codes MIDA-636 --min-size 1.5 --max-size 6 --dry-run
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1

@@ -11,6 +11,7 @@ import httpx
 from app.settings import (
     SPIDER_MAGNET_LINK_COUNT_URL,
     SPIDER_MAGNET_LINK_LIST_URL,
+    SPIDER_MAGNET_LINK_MISS_REASON_URL,
     SPIDER_MAGNET_LINK_UPDATE_URL,
     SPIDER_WORKS_URL,
 )
@@ -116,6 +117,25 @@ def count_download_links(
         )
         resp.raise_for_status()
         return int(resp.json().get("count") or 0)
+
+    return _with_client(client, timeout, _get)
+
+
+def fetch_miss_reasons(
+    code: str,
+    *,
+    client: httpx.Client | None = None,
+    timeout: float = 30.0,
+) -> tuple[int, list[str]]:
+    """返回 (miss 记录数, miss_reason 列表)。"""
+    def _get(c: httpx.Client) -> tuple[int, list[str]]:
+        resp = c.get(
+            SPIDER_MAGNET_LINK_MISS_REASON_URL,
+            params={"code": code.strip()},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return int(data.get("count") or 0), list(data.get("miss_reasons") or [])
 
     return _with_client(client, timeout, _get)
 

@@ -33,23 +33,26 @@ python3 -m venv venv
 
 ## 抓取
 
+两种模式（二选一），其余参数在 `app/settings.py` 配置。
+
 ```bash
-# 定时脚本：输出已在 log/cron_download.log
+# 定时脚本（by-date，默认最近 7 天发行日）→ log/cron_download.log
 ./cron_download.sh
 
-# 手动抓取：日志写入 log/download.log（含 Playwright 等 stderr）
+# 手动抓取 → log/download.log
 mkdir -p log
-./venv/bin/python -m app.cli --start-date 2026-04-20 --end-date 2026-04-30 \
-  >> log/download.log 2>&1
 
-./venv/bin/python -m app.cli --codes MIDA-636 --start-date 2020-01-01 --end-date 2026-12-31 \
-  >> log/download.log 2>&1
+# 1. 按作品发行日：从 spider 拉该日期范围内的番号
+./venv/bin/python -m app.cli by-date --start-date 2026-04-20 --end-date 2026-04-30 >> log/download.log 2>&1
 
-# 查看进度
+# 2. 按番号：只抓指定的 code（可多个）
+./venv/bin/python -m app.cli by-code MIDA-636 >> log/download.log 2>&1
+./venv/bin/python -m app.cli by-code MIDA-636 ABC-123 >> log/download.log 2>&1
+
 tail -f log/download.log
 ```
 
-默认不写终端；调试时可加 `--verbose` 或 `-v`。
+调试时加 `-v` 同时输出到终端。
 
 日志：`log/download.log`（手动 CLI）、`log/cron_download.log`（定时脚本）
 
@@ -57,19 +60,36 @@ tail -f log/download.log
 
 ### 搜索翻页策略
 
-- 最多翻 **5** 页（`MAX_SEARCH_PAGES`，CLI：`--max-search-pages`）
+- 最多翻 **5** 页（`MAX_SEARCH_PAGES`）
 - 每页统计 panel 总数与符合条数（番号匹配且含 `.mp4`/`.mkv`）
 - 若某页 **符合率 < 50%**（`SEARCH_PAGE_MIN_MATCH_RATIO`），停止继续翻页
 - 首页无结果或站点总页数不足时也会提前结束
 
 ## 迅雷下载
 
+按体积筛选（单位 GB，含边界）：默认 `min_size=1.5`、`max_size=6`。可与番号、入库时间组合使用。
+
 ```bash
 ./xunlei_download.sh
 ./xunlei_download.sh --dry-run
+
+# 指定番号
+./xunlei_download.sh --codes MIDA-636
+./xunlei_download.sh --codes MIDA-636 ABC-123 --dry-run
+
+# 环境变量（xunlei_download.sh 会转为 --min-size / --max-size）
+MIN_SIZE=1.5 MAX_SIZE=6 ./xunlei_download.sh
+MIN_SIZE=2 MAX_SIZE=8 ./xunlei_download.sh --codes MIDA-636
+
+# 命令行参数（与 MIN_SIZE、MAX_SIZE 二选一或混用；同名时以后面的为准）
+./xunlei_download.sh --min-size 2 --max-size 8
+./xunlei_download.sh --codes MIDA-636 --min-size 1.5 --max-size 6 --dry-run
+
+# 入库时间（环境变量或参数）
+CREATE_START=2026-04-01 CREATE_END=2026-04-30 ./xunlei_download.sh --min-size 1.5 --max-size 6
 ```
 
-接口：`GET http://{SPIDER_HOST}/spider/magnet_link/links/list`
+接口：`GET http://{SPIDER_HOST}/spider/magnet_link/links/list`（`min_size`、`max_size`、`code` 等查询参数）
 
 Windows 自动吊起迅雷可选安装 `pywin32`。
 

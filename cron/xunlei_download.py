@@ -295,6 +295,26 @@ def launch_thunder_url(
         subprocess.run(["xdg-open", url], check=True)
 
 
+def fetch_links_for_codes(
+    client: httpx.Client,
+    params: dict[str, Any],
+    codes: list[str],
+    *,
+    list_url: str,
+) -> list[dict]:
+    """按番号逐个请求 list API 并合并结果（保持 --codes 顺序）。"""
+    links: list[dict] = []
+    for code in codes:
+        code = code.strip()
+        if not code:
+            continue
+        batch = fetch_all_links(
+            client, {**params, "code": code}, list_url=list_url
+        )
+        links.extend(batch)
+    return links
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="从 API 拉取 thunder 链接并吊起迅雷下载")
     p.add_argument("--min-size", type=float, default=MIN_SIZE_GB, help="最小体积 GB（含）")
@@ -302,6 +322,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--page-size", type=int, default=XUNLEI_LIST_PAGE_SIZE, help="每页条数")
     p.add_argument("--create-start", default=None, help="入库起始时间")
     p.add_argument("--create-end", default=None, help="入库截止时间")
+    p.add_argument(
+        "--codes",
+        nargs="*",
+        metavar="CODE",
+        help="仅下载指定番号（可多个，如 --codes MIDA-636 ABC-123）",
+    )
     p.add_argument("--delay", type=float, default=1.5, help="同番号内多条 / 番号之间的间隔秒数")
     p.add_argument("--limit", type=int, default=0, help="最多添加条数，0 表示不限制")
     p.add_argument("--save-path", default="", help="保存目录（Windows COM）")
@@ -356,9 +382,12 @@ def main() -> int:
     if args.create_end:
         params["create_end"] = args.create_end
 
+    codes = [c.strip() for c in (args.codes or []) if c.strip()]
+
     print(f"API: {SPIDER_MAGNET_LINK_LIST_URL}")
+    code_hint = ", ".join(codes) if codes else "全部"
     print(
-        f"筛选: min_size={args.min_size} max_size={args.max_size} "
+        f"筛选: 番号={code_hint} min_size={args.min_size} max_size={args.max_size} "
         f"方式={method} 自动确认={'是' if auto else '否'}"
     )
 
@@ -368,9 +397,14 @@ def main() -> int:
 
     with httpx.Client(timeout=30.0) as client:
         try:
-            links = fetch_all_links(
-                client, params, list_url=SPIDER_MAGNET_LINK_LIST_URL
-            )
+            if codes:
+                links = fetch_links_for_codes(
+                    client, params, codes, list_url=SPIDER_MAGNET_LINK_LIST_URL
+                )
+            else:
+                links = fetch_all_links(
+                    client, params, list_url=SPIDER_MAGNET_LINK_LIST_URL
+                )
         except httpx.HTTPError as exc:
             print(f"请求失败: {exc}", file=sys.stderr)
             return 1

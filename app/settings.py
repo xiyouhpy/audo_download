@@ -13,6 +13,9 @@ SPIDER_MAGNET_LINK_UPDATE_URL = (
     f"http://{SPIDER_HOST}/spider/magnet_link/update_by_code"
 )
 SPIDER_MAGNET_LINK_COUNT_URL = f"http://{SPIDER_HOST}/spider/magnet_link/count"
+SPIDER_MAGNET_LINK_MISS_REASON_URL = (
+    f"http://{SPIDER_HOST}/spider/magnet_link/miss_reason"
+)
 SPIDER_MAGNET_LINK_LIST_URL = f"http://{SPIDER_HOST}/spider/magnet_link/links/list"
 
 # 老王搜索
@@ -36,8 +39,8 @@ def gb_to_bytes(gb: float) -> int:
 
 @dataclass
 class RunConfig:
-    start_date: str
-    end_date: str
+    start_date: str = ""
+    end_date: str = ""
     works_page_size: int = DEFAULT_PAGE_SIZE
     laowang_url: str = LAOWANG_URL
     min_size_gb: float = MIN_SIZE_GB

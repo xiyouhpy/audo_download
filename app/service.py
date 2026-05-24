@@ -8,6 +8,7 @@ from app.laowang import LaowangBrowser
 from app.settings import PROJECT_ROOT, SKIP_DOWNLOAD_IF_COUNT_OVER, RunConfig
 from app.spider_client import (
     count_download_links,
+    fetch_miss_reasons,
     fetch_works,
     update_magnet_links_by_code,
 )
@@ -106,6 +107,19 @@ def _process_code(
     return n, 0
 
 
+def _should_skip_code(code: str, client: httpx.Client) -> str | None:
+    """返回跳过原因；无需跳过时返回 None。"""
+    existing = count_download_links(code, client=client)
+    if existing > SKIP_DOWNLOAD_IF_COUNT_OVER:
+        return f"已有 {existing} 条链接（>{SKIP_DOWNLOAD_IF_COUNT_OVER}）"
+
+    miss_count, miss_reasons = fetch_miss_reasons(code, client=client)
+    if miss_count > 0:
+        return f"已有 {miss_count} 条 miss 记录: {miss_reasons}"
+
+    return None
+
+
 def run(cfg: RunConfig, codes: list[str] | None = None, *, verbose: bool = False) -> int:
     _setup_app_logging(verbose=verbose)
     with httpx.Client(timeout=60.0) as client:
@@ -117,23 +131,22 @@ def run(cfg: RunConfig, codes: list[str] | None = None, *, verbose: bool = False
             else {}
         )
         work_codes = codes or list(works_by_code.keys())
-        if not codes:
-            logger.info("从 spider API 获取 %s 个番号", len(work_codes))
-
-        logger.info("数据写入 spider API，日期 %s ~ %s", cfg.start_date, cfg.end_date)
+        if codes:
+            logger.info("by-code：共 %s 个番号", len(work_codes))
+        else:
+            logger.info(
+                "by-date：发行日 %s ~ %s，从 spider 拉取 %s 个番号",
+                cfg.start_date,
+                cfg.end_date,
+                len(work_codes),
+            )
 
         link_count = miss_count = skip_count = 0
         with LaowangBrowser(cfg.laowang_url, cfg.headless) as browser:
             for i, code in enumerate(work_codes, 1):
                 logger.info("[%s/%s] %s", i, len(work_codes), code)
-                existing = count_download_links(code, client=client)
-                if existing > SKIP_DOWNLOAD_IF_COUNT_OVER:
-                    logger.info(
-                        "%s 已有 %s 条链接（>%s），跳过",
-                        code,
-                        existing,
-                        SKIP_DOWNLOAD_IF_COUNT_OVER,
-                    )
+                if skip_reason := _should_skip_code(code, client):
+                    logger.info("%s %s，跳过", code, skip_reason)
                     skip_count += 1
                     continue
                 n, miss = _process_code(
